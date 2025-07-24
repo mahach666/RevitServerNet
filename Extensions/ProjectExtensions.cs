@@ -9,17 +9,10 @@ using System;
 
 namespace RevitServerNet.Extensions
 {
-    /// <summary>
-    /// Расширения для работы с проектной информацией модели
-    /// </summary>
+    // Extensions for working with project information
     public static class ProjectExtensions
     {
-        /// <summary>
-        /// Получает проектную информацию модели (параметры проекта)
-        /// </summary>
-        /// <param name="api">Экземпляр RevitServerApi</param>
-        /// <param name="modelPath">Путь к модели</param>
-        /// <returns>Проектная информация</returns>
+        // Gets project information (project parameters)
         public static async Task<List<ProjParameter>> GetProjectInfoAsync(this RevitServerApi api, string modelPath)
         {
             var encodedPath = RevitServerApi.EncodePath(modelPath);
@@ -52,11 +45,11 @@ namespace RevitServerNet.Extensions
         }
 
         /// <summary>
-        /// Десериализует JSON в объект
+        /// Deserializes JSON to an object
         /// </summary>
-        /// <typeparam name="T">Тип объекта</typeparam>
-        /// <param name="json">JSON строка</param>
-        /// <returns>Десериализованный объект</returns>
+        /// <typeparam name="T">Object type</typeparam>
+        /// <param name="json">JSON string</param>
+        /// <returns>Deserialized object</returns>
         private static T DeserializeJson<T>(string json) where T : class
         {
             if (string.IsNullOrEmpty(json))

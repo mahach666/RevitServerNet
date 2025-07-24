@@ -24,13 +24,6 @@ namespace RevitServerNet.Models
         [DataMember(Name = "MaximumFolderPathLength")] public int MaxPathLength { get; set; }
         [DataMember(Name = "MaximumModelNameLength")] public int MaxNameLength { get; set; }
         [DataMember(Name = "Servers")] public List<string> Servers { get; set; }
-        // --- Для обратной совместимости ---
-        [Obsolete] public string ServerName => Name;
-        [Obsolete] public string ServerVersion => Version;
-        [Obsolete] public List<string> ServerRoles => Roles?.ConvertAll(r => r.ToString());
-        [Obsolete] public string RootPath => "/";
-        [Obsolete] public int MaximumFolderPathLength => MaxPathLength;
-        [Obsolete] public int MaximumModelNameLength => MaxNameLength;
     }
 
     // --- DRIVE INFO ---
@@ -167,7 +160,7 @@ namespace RevitServerNet.Models
         public int TotalCount => AllPaths.Count;
     }
 
-    // --- FOLDER CONTENTS (для совместимости с расширениями) ---
+    // --- FOLDER CONTENTS (for compatibility with extensions) ---
     [DataContract]
     public class FolderContents
     {
@@ -177,7 +170,7 @@ namespace RevitServerNet.Models
         [DataMember(Name = "Path")] public string Path { get; set; }
         [DataMember(Name = "DriveSpace")] public long DriveSpace { get; set; }
         [DataMember(Name = "DriveFreeSpace")] public long DriveFreeSpace { get; set; }
-        // --- Для обратной совместимости ---
+        // --- For backward compatibility ---
         [Obsolete] public long TotalSpace => DriveSpace;
         [Obsolete] public long FreeSpace => DriveFreeSpace;
     }
@@ -191,7 +184,7 @@ namespace RevitServerNet.Models
         [DataMember(Name = "ErrorCode")] public string ErrorCode { get; set; }
     }
 
-    // --- MODEL HISTORY (для совместимости с HistoryExtensions) ---
+    // --- MODEL HISTORY (for compatibility with HistoryExtensions) ---
     [DataContract]
     public class ModelHistory
     {
@@ -210,7 +203,7 @@ namespace RevitServerNet.Models
         [DataMember(Name = "Version")] public int Version { get; set; }
     }
 
-    // --- LOCK INFO (для совместимости с HistoryExtensions) ---
+    // --- LOCK INFO (for compatibility with HistoryExtensions) ---
     [DataContract]
     public class LockInfo
     {

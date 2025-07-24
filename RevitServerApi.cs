@@ -8,14 +8,14 @@ using System.Threading.Tasks;
 namespace RevitServerNet
 {
     /// <summary>
-    /// Основной класс для работы с Revit Server REST API
+    /// Main class for working with Revit Server REST API
     /// </summary>
     public class RevitServerApi
     {
         private readonly string _baseUrl;
         private readonly string _userName;
         
-        // Официальные пути API для разных версий (из семпла Autodesk)
+        // Official API paths for different versions (from Autodesk sample)
         private static readonly Dictionary<string, string> SupportedVersions = new Dictionary<string, string>
         {
             {"2012", "/RevitServerAdminRESTService/AdminRESTService.svc"},
@@ -36,12 +36,12 @@ namespace RevitServerNet
         };
 
         /// <summary>
-        /// Инициализирует новый экземпляр RevitServerApi
+        /// Initializes a new instance of RevitServerApi
         /// </summary>
-        /// <param name="host">Хост Revit Server (например: "localhost" или IP адрес)</param>
-        /// <param name="userName">Имя пользователя для API запросов</param>
-        /// <param name="useHttps">Использовать HTTPS (по умолчанию false)</param>
-        /// <param name="serverVersion">Версия сервера (по умолчанию "2019")</param>
+        /// <param name="host">Revit Server host (e.g. "localhost" or IP address)</param>
+        /// <param name="userName">User name for API requests</param>
+        /// <param name="useHttps">Use HTTPS (default: false)</param>
+        /// <param name="serverVersion">Server version (default: "2019")</param>
         public RevitServerApi(string host, string userName, bool useHttps = false, string serverVersion = "2019")
         {
             if (string.IsNullOrEmpty(host))
@@ -59,83 +59,83 @@ namespace RevitServerNet
         }
 
         /// <summary>
-        /// Базовый URL для API
+        /// Base URL for API
         /// </summary>
         public string BaseUrl => _baseUrl;
 
         /// <summary>
-        /// Имя пользователя
+        /// User name
         /// </summary>
         public string UserName => _userName;
 
         /// <summary>
-        /// Выполняет GET запрос к API
+        /// Performs GET request to API
         /// </summary>
-        /// <param name="command">Команда API</param>
-        /// <param name="additionalHeaders">Дополнительные заголовки</param>
-        /// <returns>JSON ответ от сервера</returns>
+        /// <param name="command">API command</param>
+        /// <param name="additionalHeaders">Additional headers</param>
+        /// <returns>JSON response from server</returns>
         public async Task<string> GetAsync(string command, Dictionary<string, string> additionalHeaders = null)
         {
             return await ExecuteRequestAsync("GET", command, additionalHeaders);
         }
 
         /// <summary>
-        /// Выполняет POST запрос к API
+        /// Performs POST request to API
         /// </summary>
-        /// <param name="command">Команда API</param>
-        /// <param name="data">Данные для отправки</param>
-        /// <param name="additionalHeaders">Дополнительные заголовки</param>
-        /// <returns>JSON ответ от сервера</returns>
+        /// <param name="command">API command</param>
+        /// <param name="data">Data to send</param>
+        /// <param name="additionalHeaders">Additional headers</param>
+        /// <returns>JSON response from server</returns>
         public async Task<string> PostAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
         {
             return await ExecuteRequestAsync("POST", command, additionalHeaders, data);
         }
 
         /// <summary>
-        /// Выполняет PUT запрос к API
+        /// Performs PUT request to API
         /// </summary>
-        /// <param name="command">Команда API</param>
-        /// <param name="data">Данные для отправки</param>
-        /// <param name="additionalHeaders">Дополнительные заголовки</param>
-        /// <returns>JSON ответ от сервера</returns>
+        /// <param name="command">API command</param>
+        /// <param name="data">Data to send</param>
+        /// <param name="additionalHeaders">Additional headers</param>
+        /// <returns>JSON response from server</returns>
         public async Task<string> PutAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
         {
             return await ExecuteRequestAsync("PUT", command, additionalHeaders, data);
         }
 
         /// <summary>
-        /// Выполняет DELETE запрос к API
+        /// Performs DELETE request to API
         /// </summary>
-        /// <param name="command">Команда API</param>
-        /// <param name="additionalHeaders">Дополнительные заголовки</param>
-        /// <returns>JSON ответ от сервера</returns>
+        /// <param name="command">API command</param>
+        /// <param name="additionalHeaders">Additional headers</param>
+        /// <returns>JSON response from server</returns>
         public async Task<string> DeleteAsync(string command, Dictionary<string, string> additionalHeaders = null)
         {
             return await ExecuteRequestAsync("DELETE", command, additionalHeaders);
         }
 
         /// <summary>
-        /// Получает корректное имя машины для Revit Server API
+        /// Gets a valid machine name for Revit Server API
         /// </summary>
-        /// <returns>Корректное имя машины</returns>
+        /// <returns>Valid machine name</returns>
         private string GetValidMachineName()
         {
             var machineName = Environment.MachineName;
             
-            // Если имя машины пустое, используем альтернативные способы
+            // If machine name is empty, use alternative methods
             if (string.IsNullOrWhiteSpace(machineName))
             {
                 machineName = Environment.GetEnvironmentVariable("COMPUTERNAME") ?? "UNKNOWN";
             }
             
-            // Удаляем недопустимые символы и ограничиваем длину
+            // Remove invalid characters and limit length
             machineName = System.Text.RegularExpressions.Regex.Replace(machineName, @"[^\w\-]", "");
-            if (machineName.Length > 50) // Ограничиваем длину
+            if (machineName.Length > 50) // Limit length
             {
                 machineName = machineName.Substring(0, 50);
             }
             
-            // Если после очистки имя пустое, используем значение по умолчанию
+            // If after cleaning the name is empty, use default value
             if (string.IsNullOrWhiteSpace(machineName))
             {
                 machineName = "CLIENT-PC";
@@ -145,23 +145,23 @@ namespace RevitServerNet
         }
 
         /// <summary>
-        /// Кодирует путь в формат API (заменяет разделители на |)
+        /// Encodes path in API format (replaces separators with |)
         /// </summary>
-        /// <param name="path">Путь к файлу или папке</param>
-        /// <returns>Кодированный путь</returns>
+        /// <param name="path">Path to file or folder</param>
+        /// <returns>Encoded path</returns>
         public static string EncodePath(string path)
         {
             if (string.IsNullOrEmpty(path))
-                return "|"; // Корневая папка
+                return "|"; // Root folder
 
-            // Заменяем различные разделители на |
+            // Replace different separators with |
             path = path.Replace('\\', '|').Replace('/', '|');
             
-            // Убираем двойные разделители
+            // Remove double separators
             while (path.Contains("||"))
                 path = path.Replace("||", "|");
 
-            // Добавляем | в начало если его нет
+            // Add | at the beginning if it's not there
             if (!path.StartsWith("|"))
                 path = "|" + path;
 
@@ -169,57 +169,38 @@ namespace RevitServerNet
         }
 
         /// <summary>
-        /// Выполняет HTTP запрос к API
+        /// Performs HTTP request to API
         /// </summary>
-        /// <param name="method">HTTP метод</param>
-        /// <param name="command">Команда API</param>
-        /// <param name="additionalHeaders">Дополнительные заголовки</param>
-        /// <param name="data">Данные для отправки</param>
-        /// <returns>JSON ответ от сервера</returns>
+        /// <param name="method">HTTP method</param>
+        /// <param name="command">API command</param>
+        /// <param name="additionalHeaders">Additional headers</param>
+        /// <param name="data">Data to send</param>
+        /// <returns>JSON response from server</returns>
         private async Task<string> ExecuteRequestAsync(string method, string command, Dictionary<string, string> additionalHeaders = null, string data = null)
         {
             var url = $"{_baseUrl}/{command}";
             var request = WebRequest.Create(url) as HttpWebRequest;
-            
-            // Отладочная информация
-            System.Diagnostics.Debug.WriteLine($"=== Revit Server API Request ===");
-            System.Diagnostics.Debug.WriteLine($"URL: {url}");
-            System.Diagnostics.Debug.WriteLine($"Method: {method}");
-            
+            // Remove debug logging for release
             if (request == null)
                 throw new InvalidOperationException("Cannot create HTTP request");
 
             request.Method = method;
-            
-            // Устанавливаем ContentType только для POST/PUT запросов с данными
+            // Set ContentType only for POST/PUT with data
             if (!string.IsNullOrEmpty(data) && (method == "POST" || method == "PUT"))
             {
                 request.ContentType = "application/json";
             }
-            
-            // Добавляем обязательные заголовки для Revit Server API
-            // Используем точно такие же заголовки, как в рабочем примере
+            // Add required headers for Revit Server API
             var machineName = Environment.MachineName;
             var operationGuid = Guid.NewGuid().ToString();
-            
-            // Проверяем что все обязательные значения не пустые
             if (string.IsNullOrEmpty(_userName))
                 throw new InvalidOperationException("User name cannot be null or empty");
             if (string.IsNullOrEmpty(machineName))
                 throw new InvalidOperationException("Machine name cannot be null or empty");
-            
-            // Добавляем заголовки в том же порядке, что и в рабочем примере
             request.Headers.Add("User-Name", _userName);
             request.Headers.Add("User-Machine-Name", machineName);
             request.Headers.Add("Operation-GUID", operationGuid);
-            
-            // Отладочная информация о заголовках
-            System.Diagnostics.Debug.WriteLine($"User-Name: '{_userName}'");
-            System.Diagnostics.Debug.WriteLine($"User-Machine-Name: '{machineName}'");
-            System.Diagnostics.Debug.WriteLine($"Operation-GUID: '{operationGuid}'");
-            System.Diagnostics.Debug.WriteLine($"=== End Headers ===");
-            
-            // Добавляем дополнительные заголовки
+            // Add additional headers if provided
             if (additionalHeaders != null)
             {
                 foreach (var header in additionalHeaders)
@@ -227,19 +208,15 @@ namespace RevitServerNet
                     request.Headers.Add(header.Key, header.Value);
                 }
             }
-
-            // Отправляем данные если есть
             if (!string.IsNullOrEmpty(data) && (method == "POST" || method == "PUT"))
             {
                 var bytes = Encoding.UTF8.GetBytes(data);
                 request.ContentLength = bytes.Length;
-                
                 using (var stream = await request.GetRequestStreamAsync())
                 {
                     await stream.WriteAsync(bytes, 0, bytes.Length);
                 }
             }
-
             try
             {
                 using (var response = await request.GetResponseAsync() as HttpWebResponse)
@@ -247,7 +224,6 @@ namespace RevitServerNet
                 {
                     if (stream == null)
                         return null;
-
                     using (var reader = new StreamReader(stream))
                     {
                         return await reader.ReadToEndAsync();
@@ -271,7 +247,7 @@ namespace RevitServerNet
     }
 
     /// <summary>
-    /// Исключение для ошибок API Revit Server
+    /// Exception for Revit Server API errors
     /// </summary>
     public class RevitServerApiException : Exception
     {
