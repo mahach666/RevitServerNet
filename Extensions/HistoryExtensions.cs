@@ -1,10 +1,8 @@
 using System.Threading.Tasks;
 using RevitServerNet.Models;
-using System.Runtime.Serialization.Json;
-using System.IO;
-using System.Text;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json;
 
 namespace RevitServerNet.Extensions
 {
@@ -220,12 +218,7 @@ namespace RevitServerNet.Extensions
         {
             if (string.IsNullOrEmpty(json))
                 return null;
-
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as T;
-            }
+            return JsonConvert.DeserializeObject<T>(json);
         }
     }
 } 

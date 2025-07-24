@@ -1,8 +1,6 @@
 using System.Threading.Tasks;
 using RevitServerNet.Models;
-using System.Runtime.Serialization.Json;
-using System.IO;
-using System.Text;
+using Newtonsoft.Json;
 
 namespace RevitServerNet.Extensions
 {
@@ -50,7 +48,14 @@ namespace RevitServerNet.Extensions
             try
             {
                 var serverInfo = await GetServerInfoAsync(api);
-                return !string.IsNullOrEmpty(serverInfo?.ServerName);
+                // Проверяем наличие хотя бы одного ключевого поля
+                return serverInfo != null &&
+                    (!string.IsNullOrEmpty(serverInfo.Name) ||
+                     !string.IsNullOrEmpty(serverInfo.Version) ||
+                     !string.IsNullOrEmpty(serverInfo.MachineName) ||
+                     (serverInfo.Roles != null && serverInfo.Roles.Count > 0) ||
+                     serverInfo.MaxPathLength > 0 ||
+                     serverInfo.MaxNameLength > 0);
             }
             catch
             {
@@ -134,12 +139,7 @@ namespace RevitServerNet.Extensions
         {
             if (string.IsNullOrEmpty(json))
                 return null;
-
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as T;
-            }
+            return JsonConvert.DeserializeObject<T>(json);
         }
     }
 } 

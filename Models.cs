@@ -4,265 +4,227 @@ using System.Runtime.Serialization;
 
 namespace RevitServerNet.Models
 {
-    /// <summary>
-    /// Информация о сервере
-    /// </summary>
+    // --- ENUMS ---
+    public enum ServerRole { Host = 0, Accelerator = 1, Admin = 2 }
+    public enum LockState { Unlocked = 0, Locked = 1, LockedParent = 2, LockedChild = 3, BeingUnlocked = 4, BeingLocked = 5 }
+    public enum LockOptions { NotSet = 0, Read = 1, Write = 2, NonExclusiveReadWrite = 128, ReadAndNonExclusiveReadWrite = 129, WriteAndNonExclusiveReadWrite = 130, ReadWriteAndNonExclusiveReadWrite = 130 }
+    public enum LockType { Data = 0, Permissions = 1 }
+    public enum ParamType { System, Custom, Shared, Unknown }
+    public enum ParamDataType { Length, Number, Material, Text, MultilineText, YesNo, Unknown }
+
+    // --- SERVER INFO ---
     [DataContract]
     public class ServerInfo
     {
-        [DataMember(Name = "ServerName")]
-        public string ServerName { get; set; }
-
-        [DataMember(Name = "ServerVersion")]
-        public string ServerVersion { get; set; }
-
-        [DataMember(Name = "RootPath")]
-        public string RootPath { get; set; }
-
-        [DataMember(Name = "MaximumFolderPathLength")]
-        public int MaximumFolderPathLength { get; set; }
-
-        [DataMember(Name = "MaximumModelNameLength")]
-        public int MaximumModelNameLength { get; set; }
-
-        [DataMember(Name = "ServerRoles")]
-        public List<string> ServerRoles { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Version")] public string Version { get; set; }
+        [DataMember(Name = "MachineName")] public string MachineName { get; set; }
+        [DataMember(Name = "Roles")] public List<ServerRole> Roles { get; set; }
+        [DataMember(Name = "AccessLevelTypes")] public List<string> AccessLevelTypes { get; set; }
+        [DataMember(Name = "MaximumFolderPathLength")] public int MaxPathLength { get; set; }
+        [DataMember(Name = "MaximumModelNameLength")] public int MaxNameLength { get; set; }
+        [DataMember(Name = "Servers")] public List<string> Servers { get; set; }
+        // --- Для обратной совместимости ---
+        [Obsolete] public string ServerName => Name;
+        [Obsolete] public string ServerVersion => Version;
+        [Obsolete] public List<string> ServerRoles => Roles?.ConvertAll(r => r.ToString());
+        [Obsolete] public string RootPath => "/";
+        [Obsolete] public int MaximumFolderPathLength => MaxPathLength;
+        [Obsolete] public int MaximumModelNameLength => MaxNameLength;
     }
 
-    /// <summary>
-    /// Информация о папке
-    /// </summary>
+    // --- DRIVE INFO ---
     [DataContract]
-    public class FolderInfo
+    public class ServerDriveInfo
     {
-        [DataMember(Name = "Name")]
-        public string Name { get; set; }
-
-        [DataMember(Name = "Size")]
-        public long Size { get; set; }
-
-        [DataMember(Name = "DateCreated")]
-        public string DateCreated { get; set; }
-
-        [DataMember(Name = "DateModified")]
-        public string DateModified { get; set; }
-
-        [DataMember(Name = "LockContext")]
-        public string LockContext { get; set; }
-
-        [DataMember(Name = "LockState")]
-        public string LockState { get; set; }
-
-        [DataMember(Name = "ModelLocksInFolder")]
-        public int ModelLocksInFolder { get; set; }
-
-        [DataMember(Name = "HasSubfolders")]
-        public bool HasSubfolders { get; set; }
-
-        [DataMember(Name = "Path")]
-        public string Path { get; set; }
+        [DataMember(Name = "DriveSpace")] public long DriveSpace { get; set; }
+        [DataMember(Name = "DriveFreeSpace")] public long DriveFreeSpace { get; set; }
     }
 
-    /// <summary>
-    /// Содержимое папки
-    /// </summary>
+    // --- LOCK INFO ---
     [DataContract]
-    public class FolderContents
+    public class IPLockInfo
     {
-        [DataMember(Name = "Models")]
-        public List<ModelInfo> Models { get; set; }
-
-        [DataMember(Name = "Folders")]
-        public List<FolderInfo> Folders { get; set; }
-
-        [DataMember(Name = "Files")]
-        public List<RevitFileInfo> Files { get; set; } // ДОБАВЛЕНО: из Python API
-
-        [DataMember(Name = "Path")]
-        public string Path { get; set; }
-
-        [DataMember(Name = "DriveSpace")] 
-        public long TotalSpace { get; set; } // ДОБАВЛЕНО: из Python API
-
-        [DataMember(Name = "DriveFreeSpace")]
-        public long FreeSpace { get; set; } // ДОБАВЛЕНО: из Python API
+        [DataMember(Name = "Age")] public string Age { get; set; }
+        [DataMember(Name = "LockOptions")] public LockOptions LockOptions { get; set; }
+        [DataMember(Name = "LockType")] public LockType LockType { get; set; }
+        [DataMember(Name = "ModelPath")] public string ModelPath { get; set; }
+        [DataMember(Name = "TimeStamp")] public string TimeStamp { get; set; }
+        [DataMember(Name = "UserName")] public string UserName { get; set; }
     }
 
-    /// <summary>
-    /// Информация о файле (из Python API)
-    /// </summary>
+    // --- FILE INFO ---
     [DataContract]
     public class RevitFileInfo
     {
-        [DataMember(Name = "Name")]
-        public string Name { get; set; }
-
-        [DataMember(Name = "Size")]
-        public long Size { get; set; }
-
-        [DataMember(Name = "IsText")]
-        public bool IsText { get; set; }
-
-        public string Path { get; set; } // Полный путь к файлу
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Size")] public long Size { get; set; }
+        [DataMember(Name = "IsText")] public bool IsText { get; set; }
     }
 
-    /// <summary>
-    /// Информация о модели
-    /// </summary>
+    // --- FOLDER INFO ---
+    [DataContract]
+    public class FolderInfo
+    {
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Size")] public long Size { get; set; }
+        [DataMember(Name = "HasContents")] public bool HasContents { get; set; }
+        [DataMember(Name = "LockContext")] public string LockContext { get; set; }
+        [DataMember(Name = "LockState")] public LockState LockState { get; set; }
+        [DataMember(Name = "ModelLocksInProgress")] public List<IPLockInfo> LocksInProgress { get; set; }
+    }
+
+    // --- MODEL INFO ---
     [DataContract]
     public class ModelInfo
     {
-        [DataMember(Name = "Name")]
-        public string Name { get; set; }
-
-        [DataMember(Name = "Size")]
-        public long Size { get; set; }
-
-        [DataMember(Name = "DateCreated")]
-        public string DateCreated { get; set; }
-
-        [DataMember(Name = "DateModified")]
-        public string DateModified { get; set; }
-
-        [DataMember(Name = "LockContext")]
-        public string LockContext { get; set; }
-
-        [DataMember(Name = "LockState")]
-        public string LockState { get; set; }
-
-        [DataMember(Name = "ModelGUID")]
-        public string ModelGUID { get; set; }
-
-        [DataMember(Name = "ProductVersion")]
-        public string ProductVersion { get; set; }
-
-        [DataMember(Name = "SupportSize")]
-        public long SupportSize { get; set; }
-
-        [DataMember(Name = "IsTabular")]
-        public bool IsTabular { get; set; }
-
-        [DataMember(Name = "Path")]
-        public string Path { get; set; }
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Size")] public long Size { get; set; }
+        [DataMember(Name = "SupportSize")] public long SupportSize { get; set; }
+        [DataMember(Name = "ProductVersion")] public int ProductVersion { get; set; }
+        [DataMember(Name = "LockContext")] public string LockContext { get; set; }
+        [DataMember(Name = "LockState")] public LockState LockState { get; set; }
+        [DataMember(Name = "ModelLocksInProgress")] public List<IPLockInfo> LocksInProgress { get; set; }
     }
 
-    /// <summary>
-    /// История модели
-    /// </summary>
+    // --- EXTENDED MODEL INFO ---
     [DataContract]
-    public class ModelHistory
+    public class ModelInfoEx
     {
-        [DataMember(Name = "Items")]
-        public List<HistoryItem> Items { get; set; }
-
-        [DataMember(Name = "Path")]
-        public string Path { get; set; }
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Size")] public long Size { get; set; }
+        [DataMember(Name = "Guid")] public string Guid { get; set; }
+        [DataMember(Name = "DateCreated")] public string DateCreated { get; set; }
+        [DataMember(Name = "DateModified")] public string DateModified { get; set; }
+        [DataMember(Name = "LastModifiedBy")] public string LastModifiedBy { get; set; }
+        [DataMember(Name = "SupportSize")] public long SupportSize { get; set; }
     }
 
-    /// <summary>
-    /// Элемент истории
-    /// </summary>
+    // --- ENTRY CONTENTS ---
     [DataContract]
-    public class HistoryItem
+    public class EntryContents
     {
-        [DataMember(Name = "User")]
-        public string User { get; set; }
-
-        [DataMember(Name = "Date")]
-        public string Date { get; set; }
-
-        [DataMember(Name = "Comment")]
-        public string Comment { get; set; }
-
-        [DataMember(Name = "Size")]
-        public long Size { get; set; }
-
-        [DataMember(Name = "SupportSize")]
-        public long SupportSize { get; set; }
-
-        [DataMember(Name = "Version")]
-        public int Version { get; set; }
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "DriveSpace")] public long DriveSpace { get; set; }
+        [DataMember(Name = "DriveFreeSpace")] public long DriveFreeSpace { get; set; }
+        [DataMember(Name = "Files")] public List<RevitFileInfo> Files { get; set; }
+        [DataMember(Name = "Folders")] public List<FolderInfo> Folders { get; set; }
+        [DataMember(Name = "LockContext")] public string LockContext { get; set; }
+        [DataMember(Name = "LockState")] public LockState LockState { get; set; }
+        [DataMember(Name = "ModelLocksInProgress")] public List<IPLockInfo> LocksInProgress { get; set; }
+        [DataMember(Name = "Models")] public List<ModelInfo> Models { get; set; }
     }
 
-    /// <summary>
-    /// Информация о блокировке
-    /// </summary>
+    // --- PROJECT INFO ---
     [DataContract]
-    public class LockInfo
+    public class ProjectInfo
     {
-        [DataMember(Name = "UserName")]
-        public string UserName { get; set; }
-
-        [DataMember(Name = "TimeStamp")]
-        public string TimeStamp { get; set; }
-
-        [DataMember(Name = "ModelGUID")]
-        public string ModelGUID { get; set; }
-
-        [DataMember(Name = "SessionGUID")]
-        public string SessionGUID { get; set; }
-
-        [DataMember(Name = "TimeStampOfLastRefresh")]
-        public string TimeStampOfLastRefresh { get; set; }
-
-        [DataMember(Name = "DateTimeFormat")]
-        public string DateTimeFormat { get; set; }
+        [DataMember(Name = "Parameters")] public List<ProjParameter> Parameters { get; set; }
     }
 
-    /// <summary>
-    /// Список блокировок
-    /// </summary>
     [DataContract]
-    public class LocksList
+    public class ProjParameter
     {
-        [DataMember(Name = "Locks")]
-        public List<LockInfo> Locks { get; set; }
+        [DataMember(Name = "Name")] public string Name { get; set; }
+        [DataMember(Name = "Value")] public string Value { get; set; }
+        [DataMember(Name = "Id")] public string Id { get; set; }
+        [DataMember(Name = "Category")] public string Category { get; set; }
+        [DataMember(Name = "Type")] public ParamType Type { get; set; }
+        [DataMember(Name = "DataType")] public ParamDataType DataType { get; set; }
     }
 
-    /// <summary>
-    /// Результат операции
-    /// </summary>
+    // --- HISTORY ---
+    [DataContract]
+    public class MHistoryInfo
+    {
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "Items")] public List<MHistoryItemInfo> Items { get; set; }
+    }
+
+    [DataContract]
+    public class MHistoryItemInfo
+    {
+        [DataMember(Name = "Id")] public string Id { get; set; }
+        [DataMember(Name = "Comment")] public string Comment { get; set; }
+        [DataMember(Name = "Date")] public string Date { get; set; }
+        [DataMember(Name = "ModelSize")] public long ModelSize { get; set; }
+        [DataMember(Name = "OverwrittenBy")] public string OverwrittenBy { get; set; }
+        [DataMember(Name = "SupportSize")] public long SupportSize { get; set; }
+        [DataMember(Name = "User")] public string User { get; set; }
+    }
+
+    // --- WALK RESULT ---
+    public class WalkResult
+    {
+        public List<string> AllPaths { get; set; } = new List<string>();
+        public List<string> FolderPaths { get; set; } = new List<string>();
+        public List<string> FilePaths { get; set; } = new List<string>();
+        public List<string> ModelPaths { get; set; } = new List<string>();
+        public int TotalCount => AllPaths.Count;
+    }
+
+    // --- FOLDER CONTENTS (для совместимости с расширениями) ---
+    [DataContract]
+    public class FolderContents
+    {
+        [DataMember(Name = "Models")] public List<ModelInfo> Models { get; set; }
+        [DataMember(Name = "Folders")] public List<FolderInfo> Folders { get; set; }
+        [DataMember(Name = "Files")] public List<RevitFileInfo> Files { get; set; }
+        [DataMember(Name = "Path")] public string Path { get; set; }
+        [DataMember(Name = "DriveSpace")] public long DriveSpace { get; set; }
+        [DataMember(Name = "DriveFreeSpace")] public long DriveFreeSpace { get; set; }
+        // --- Для обратной совместимости ---
+        [Obsolete] public long TotalSpace => DriveSpace;
+        [Obsolete] public long FreeSpace => DriveFreeSpace;
+    }
+
+    // --- OPERATION RESULT ---
     [DataContract]
     public class OperationResult
     {
-        [DataMember(Name = "Success")]
-        public bool Success { get; set; }
-
-        [DataMember(Name = "Message")]
-        public string Message { get; set; }
-
-        [DataMember(Name = "ErrorCode")]
-        public string ErrorCode { get; set; }
+        [DataMember(Name = "Success")] public bool Success { get; set; }
+        [DataMember(Name = "Message")] public string Message { get; set; }
+        [DataMember(Name = "ErrorCode")] public string ErrorCode { get; set; }
     }
 
-    /// <summary>
-    /// Результат обхода дерева (для WalkAsync)
-    /// </summary>
-    public class WalkResult
+    // --- MODEL HISTORY (для совместимости с HistoryExtensions) ---
+    [DataContract]
+    public class ModelHistory
     {
-        /// <summary>
-        /// Все найденные пути (папки + файлы + модели)
-        /// </summary>
-        public List<string> AllPaths { get; set; } = new List<string>();
+        [DataMember(Name = "Items")] public List<HistoryItem> Items { get; set; }
+        [DataMember(Name = "Path")] public string Path { get; set; }
+    }
 
-        /// <summary>
-        /// Только пути к папкам
-        /// </summary>
-        public List<string> FolderPaths { get; set; } = new List<string>();
+    [DataContract]
+    public class HistoryItem
+    {
+        [DataMember(Name = "User")] public string User { get; set; }
+        [DataMember(Name = "Date")] public string Date { get; set; }
+        [DataMember(Name = "Comment")] public string Comment { get; set; }
+        [DataMember(Name = "Size")] public long Size { get; set; }
+        [DataMember(Name = "SupportSize")] public long SupportSize { get; set; }
+        [DataMember(Name = "Version")] public int Version { get; set; }
+    }
 
-        /// <summary>
-        /// Только пути к файлам
-        /// </summary>
-        public List<string> FilePaths { get; set; } = new List<string>();
+    // --- LOCK INFO (для совместимости с HistoryExtensions) ---
+    [DataContract]
+    public class LockInfo
+    {
+        [DataMember(Name = "UserName")] public string UserName { get; set; }
+        [DataMember(Name = "TimeStamp")] public string TimeStamp { get; set; }
+        [DataMember(Name = "ModelGUID")] public string ModelGUID { get; set; }
+        [DataMember(Name = "SessionGUID")] public string SessionGUID { get; set; }
+        [DataMember(Name = "TimeStampOfLastRefresh")] public string TimeStampOfLastRefresh { get; set; }
+        [DataMember(Name = "DateTimeFormat")] public string DateTimeFormat { get; set; }
+    }
 
-        /// <summary>
-        /// Только пути к моделям
-        /// </summary>
-        public List<string> ModelPaths { get; set; } = new List<string>();
-
-        /// <summary>
-        /// Общее количество найденных элементов
-        /// </summary>
-        public int TotalCount => AllPaths.Count;
+    [DataContract]
+    public class LocksList
+    {
+        [DataMember(Name = "Locks")] public List<LockInfo> Locks { get; set; }
     }
 } 

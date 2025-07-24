@@ -1,9 +1,8 @@
 using System.Threading.Tasks;
 using RevitServerNet.Models;
-using System.Runtime.Serialization.Json;
-using System.IO;
-using System.Text;
 using System.Collections.Generic;
+using System.Diagnostics;
+using Newtonsoft.Json;
 
 namespace RevitServerNet.Extensions
 {
@@ -33,6 +32,7 @@ namespace RevitServerNet.Extensions
             var encodedPath = RevitServerApi.EncodePath(folderPath);
             var command = $"{encodedPath}/contents";
             var json = await api.GetAsync(command);
+            System.Diagnostics.Debug.WriteLine($"[GetFolderContentsAsync] Path: {folderPath} | Encoded: {encodedPath} | JSON: {json}");
             return DeserializeJson<FolderContents>(json);
         }
 
@@ -170,7 +170,10 @@ namespace RevitServerNet.Extensions
         public static async Task<List<ModelInfo>> GetAllModelsRecursiveAsync(this RevitServerApi api, string folderPath = "|")
         {
             var models = new List<ModelInfo>();
-            await GetModelsRecursiveInternal(api, folderPath, models);
+            var visited = new HashSet<string>();
+            Debug.WriteLine($"[GetAllModelsRecursiveAsync] Start: {folderPath}");
+            await GetModelsRecursiveInternal(api, folderPath, models, visited);
+            Debug.WriteLine($"[GetAllModelsRecursiveAsync] Done. Total models: {models.Count}");
             return models;
         }
 
@@ -183,44 +186,82 @@ namespace RevitServerNet.Extensions
         public static async Task<List<FolderInfo>> GetAllFoldersRecursiveAsync(this RevitServerApi api, string folderPath = "|")
         {
             var folders = new List<FolderInfo>();
-            await GetFoldersRecursiveInternal(api, folderPath, folders);
+            var visited = new HashSet<string>();
+            Debug.WriteLine($"[GetAllFoldersRecursiveAsync] Start: {folderPath}");
+            await GetFoldersRecursiveInternal(api, folderPath, folders, visited);
+            Debug.WriteLine($"[GetAllFoldersRecursiveAsync] Done. Total folders: {folders.Count}");
             return folders;
         }
 
         /// <summary>
         /// Рекурсивно получает модели
         /// </summary>
-        private static async Task GetModelsRecursiveInternal(RevitServerApi api, string folderPath, List<ModelInfo> models)
+        private static async Task GetModelsRecursiveInternal(RevitServerApi api, string folderPath, List<ModelInfo> models, HashSet<string> visited)
         {
+            if (string.IsNullOrEmpty(folderPath) || visited.Contains(folderPath))
+            {
+                Debug.WriteLine($"[GetModelsRecursiveInternal] Skip: {folderPath}");
+                return;
+            }
+            visited.Add(folderPath);
+            Debug.WriteLine($"[GetModelsRecursiveInternal] Enter: {folderPath}");
             var contents = await GetFolderContentsAsync(api, folderPath);
-            if (contents == null) return;
-
+            if (contents == null)
+            {
+                Debug.WriteLine($"[GetModelsRecursiveInternal] Null contents: {folderPath}");
+                return;
+            }
             if (contents.Models != null)
+            {
+                Debug.WriteLine($"[GetModelsRecursiveInternal] Models found: {contents.Models.Count} in {folderPath}");
                 models.AddRange(contents.Models);
-
+            }
             if (contents.Folders != null)
             {
+                Debug.WriteLine($"[GetModelsRecursiveInternal] Folders found: {contents.Folders.Count} in {folderPath}");
                 foreach (var folder in contents.Folders)
                 {
-                    await GetModelsRecursiveInternal(api, folder.Path, models);
+                    var childPath = folderPath == "|" ? "|" + folder.Name : folderPath + "|" + folder.Name;
+                    if (!string.IsNullOrEmpty(childPath) && childPath != folderPath)
+                    {
+                        Debug.WriteLine($"[GetModelsRecursiveInternal] Recurse: {childPath}");
+                        await GetModelsRecursiveInternal(api, childPath, models, visited);
+                    }
                 }
             }
+            Debug.WriteLine($"[GetModelsRecursiveInternal] Exit: {folderPath}");
         }
 
         /// <summary>
         /// Рекурсивно получает папки
         /// </summary>
-        private static async Task GetFoldersRecursiveInternal(RevitServerApi api, string folderPath, List<FolderInfo> folders)
+        private static async Task GetFoldersRecursiveInternal(RevitServerApi api, string folderPath, List<FolderInfo> folders, HashSet<string> visited)
         {
+            if (string.IsNullOrEmpty(folderPath) || visited.Contains(folderPath))
+            {
+                Debug.WriteLine($"[GetFoldersRecursiveInternal] Skip: {folderPath}");
+                return;
+            }
+            visited.Add(folderPath);
+            Debug.WriteLine($"[GetFoldersRecursiveInternal] Enter: {folderPath}");
             var contents = await GetFolderContentsAsync(api, folderPath);
-            if (contents?.Folders == null) return;
-
+            if (contents?.Folders == null)
+            {
+                Debug.WriteLine($"[GetFoldersRecursiveInternal] Null or no folders: {folderPath}");
+                return;
+            }
             folders.AddRange(contents.Folders);
-
+            Debug.WriteLine($"[GetFoldersRecursiveInternal] Folders found: {contents.Folders.Count} in {folderPath}");
             foreach (var folder in contents.Folders)
             {
-                await GetFoldersRecursiveInternal(api, folder.Path, folders);
+                var childPath = folderPath == "|" ? "|" + folder.Name : folderPath + "|" + folder.Name;
+                if (!string.IsNullOrEmpty(childPath) && childPath != folderPath)
+                {
+                    Debug.WriteLine($"[GetFoldersRecursiveInternal] Recurse: {childPath}");
+                    await GetFoldersRecursiveInternal(api, childPath, folders, visited);
+                }
             }
+            Debug.WriteLine($"[GetFoldersRecursiveInternal] Exit: {folderPath}");
         }
 
         /// <summary>
@@ -272,67 +313,88 @@ namespace RevitServerNet.Extensions
         public static async Task<WalkResult> WalkAsync(this RevitServerApi api, string topPath = "|", bool includeFiles = true, bool includeModels = true, bool digModels = false)
         {
             var result = new WalkResult();
-            await WalkRecursiveInternal(api, topPath, includeFiles, includeModels, digModels, result);
+            var visited = new HashSet<string>();
+            Debug.WriteLine($"[WalkAsync] Start: {topPath}");
+            await WalkRecursiveInternal(api, topPath, includeFiles, includeModels, digModels, result, visited);
+            Debug.WriteLine($"[WalkAsync] Done. Total: {result.TotalCount}");
             return result;
         }
 
         /// <summary>
         /// Внутренняя рекурсивная функция для обхода дерева
         /// </summary>
-        private static async Task WalkRecursiveInternal(RevitServerApi api, string currentPath, bool includeFiles, bool includeModels, bool digModels, WalkResult result)
+        private static async Task WalkRecursiveInternal(RevitServerApi api, string currentPath, bool includeFiles, bool includeModels, bool digModels, WalkResult result, HashSet<string> visited)
         {
+            if (string.IsNullOrEmpty(currentPath) || visited.Contains(currentPath))
+            {
+                Debug.WriteLine($"[WalkRecursiveInternal] Skip: {currentPath}");
+                return;
+            }
+            visited.Add(currentPath);
+            Debug.WriteLine($"[WalkRecursiveInternal] Enter: {currentPath}");
             try
             {
                 var contents = await GetFolderContentsAsync(api, currentPath);
-                if (contents == null) return;
-
-                // Добавляем текущую папку
+                if (contents == null)
+                {
+                    Debug.WriteLine($"[WalkRecursiveInternal] Null contents: {currentPath}");
+                    return;
+                }
                 result.AllPaths.Add(currentPath);
                 result.FolderPaths.Add(currentPath);
-
-                // Добавляем файлы
                 if (includeFiles && contents.Files != null)
                 {
+                    Debug.WriteLine($"[WalkRecursiveInternal] Files found: {contents.Files.Count} in {currentPath}");
                     foreach (var file in contents.Files)
                     {
-                        var filePath = $"{currentPath}/{file.Name}".Replace("//", "/");
+                        var filePath = currentPath == "|" ? "|" + file.Name : currentPath + "|" + file.Name;
+                        Debug.WriteLine($"[WalkRecursiveInternal] File: {filePath}");
                         result.AllPaths.Add(filePath);
                         result.FilePaths.Add(filePath);
                     }
                 }
-
-                // Добавляем модели
                 if (includeModels && contents.Models != null)
                 {
+                    Debug.WriteLine($"[WalkRecursiveInternal] Models found: {contents.Models.Count} in {currentPath}");
                     foreach (var model in contents.Models)
                     {
-                        result.AllPaths.Add(model.Path);
-                        result.ModelPaths.Add(model.Path);
+                        var modelPath = currentPath == "|" ? "|" + model.Name : currentPath + "|" + model.Name;
+                        Debug.WriteLine($"[WalkRecursiveInternal] Model: {modelPath}");
+                        result.AllPaths.Add(modelPath);
+                        result.ModelPaths.Add(modelPath);
                     }
                 }
-
-                // Рекурсивно обходим подпапки
                 if (contents.Folders != null)
                 {
+                    Debug.WriteLine($"[WalkRecursiveInternal] Folders found: {contents.Folders.Count} in {currentPath}");
                     foreach (var folder in contents.Folders)
                     {
-                        await WalkRecursiveInternal(api, folder.Path, includeFiles, includeModels, digModels, result);
+                        var childPath = currentPath == "|" ? "|" + folder.Name : currentPath + "|" + folder.Name;
+                        if (!string.IsNullOrEmpty(childPath) && childPath != currentPath)
+                        {
+                            Debug.WriteLine($"[WalkRecursiveInternal] Recurse: {childPath}");
+                            await WalkRecursiveInternal(api, childPath, includeFiles, includeModels, digModels, result, visited);
+                        }
                     }
                 }
-
-                // Рекурсивно обходим модели (если включено)
                 if (digModels && includeModels && contents.Models != null)
                 {
                     foreach (var model in contents.Models)
                     {
-                        await WalkRecursiveInternal(api, model.Path, includeFiles, includeModels, digModels, result);
+                        var modelPath = currentPath == "|" ? "|" + model.Name : currentPath + "|" + model.Name;
+                        if (!string.IsNullOrEmpty(modelPath) && modelPath != currentPath)
+                        {
+                            Debug.WriteLine($"[WalkRecursiveInternal] DigModel: {modelPath}");
+                            await WalkRecursiveInternal(api, modelPath, includeFiles, includeModels, digModels, result, visited);
+                        }
                     }
                 }
             }
-            catch
+            catch (System.Exception ex)
             {
-                // Игнорируем ошибки доступа к отдельным папкам
+                Debug.WriteLine($"[WalkRecursiveInternal] ERROR in {currentPath}: {ex.Message}");
             }
+            Debug.WriteLine($"[WalkRecursiveInternal] Exit: {currentPath}");
         }
 
         /// <summary>
@@ -345,12 +407,7 @@ namespace RevitServerNet.Extensions
         {
             if (string.IsNullOrEmpty(json))
                 return null;
-
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as T;
-            }
+            return JsonConvert.DeserializeObject<T>(json);
         }
     }
 } 

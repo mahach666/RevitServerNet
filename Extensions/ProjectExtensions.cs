@@ -4,6 +4,8 @@ using System.Runtime.Serialization.Json;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
+using System;
 
 namespace RevitServerNet.Extensions
 {
@@ -18,12 +20,35 @@ namespace RevitServerNet.Extensions
         /// <param name="api">Экземпляр RevitServerApi</param>
         /// <param name="modelPath">Путь к модели</param>
         /// <returns>Проектная информация</returns>
-        public static async Task<string> GetProjectInfoAsync(this RevitServerApi api, string modelPath)
+        public static async Task<List<ProjParameter>> GetProjectInfoAsync(this RevitServerApi api, string modelPath)
         {
             var encodedPath = RevitServerApi.EncodePath(modelPath);
-            var command = $"{encodedPath}/projectinfo"; // ДОБАВЛЕНО: отсутствовал в нашем решении
+            var command = $"{encodedPath}/projectinfo";
             var json = await api.GetAsync(command);
-            return json; // Возвращаем raw JSON так как структура сложная
+
+            var result = new List<ProjParameter>();
+            var arr = JArray.Parse(json);
+
+            foreach (var item in arr)
+            {
+                string category = item["A:title"]?.ToString();
+
+                foreach (var prop in item.Children<JProperty>())
+                {
+                    if (prop.Name == "A:title") continue;
+                    var param = prop.Value;
+                    result.Add(new ProjParameter
+                    {
+                        Category = category,
+                        Name = param["@displayName"]?.ToString(),
+                        Value = param["#text"]?.ToString(),
+                        Id = param["@id"]?.ToString(),
+                        Type = Enum.TryParse<ParamType>(param["@type"]?.ToString(), true, out var t) ? t : ParamType.Unknown,
+                        DataType = Enum.TryParse<ParamDataType>(param["@typeOfParameter"]?.ToString(), true, out var dt) ? dt : ParamDataType.Unknown
+                    });
+                }
+            }
+            return result;
         }
 
         /// <summary>
