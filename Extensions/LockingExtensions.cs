@@ -84,49 +84,41 @@ namespace RevitServerNet.Extensions
             }
         }
 
-        // Gets descendent locks
-        public static async Task<List<string>> GetDescendentLocksAsync(this RevitServerApi api, string folderPath)
+        //Gets descendent locks
+        public static async Task<string> GetDescendentLocksAsync(this RevitServerApi api, string folderPath)
         {
             try
             {
                 var encodedPath = RevitServerApi.EncodePath(folderPath);
                 var command = $"{encodedPath}/descendent/locks";
                 var json = await api.GetAsync(command);
-                
-                // Parse the JSON response to extract locked paths
-                try
-                {
-                    var response = DeserializeJson<dynamic>(json);
-                    if (response?.Items != null)
-                    {
-                        var lockedPaths = new List<string>();
-                        foreach (var item in response.Items)
-                        {
-                            lockedPaths.Add(item.ToString());
-                        }
-                        return lockedPaths;
-                    }
-                }
-                catch
-                {
-                    // If parsing fails, return empty list
-                }
-                
-                return new List<string>();
+
+                //try
+                //{
+                //    var response = DeserializeJson<dynamic>(json);
+                //    if (response?.Items != null)
+                //    {
+                //        var lockedPaths = new List<string>();
+                //        foreach (var item in response.Items)
+                //        {
+                //            lockedPaths.Add(item.ToString());
+                //        }
+                //        return lockedPaths;
+                //    }
+                //}
+                //catch
+                //{
+                //}
+
+                return json;
             }
             catch (RevitServerApiException ex)
             {
-                // Handle any RevitServerApiException (including MethodNotAllowed)
-                // Log the exception for debugging but don't rethrow
-                System.Diagnostics.Debug.WriteLine($"GetDescendentLocksAsync caught RevitServerApiException: {ex.Message}");
-                return new List<string>();
+                return ex.ToString();
             }
             catch (Exception ex)
             {
-                // Handle any other exception
-                // Log the exception for debugging but don't rethrow
-                System.Diagnostics.Debug.WriteLine($"GetDescendentLocksAsync caught Exception: {ex.Message}");
-                return new List<string>();
+                return ex.ToString();
             }
         }
 
