@@ -6,16 +6,16 @@
     <AssemblyName>RevitServerNet</AssemblyName>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>RevitServerNet</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.0.3</Version>
     <Authors>RevitServerNet Contributors</Authors>
     <Company>RevitServerNet Contributors</Company>
     <Product>RevitServerNet</Product>
-    <Description>A .NET library for working with Revit Server REST API. Provides easy access to Revit Server operations including folder management, project operations, locking, and history tracking.</Description>
+    <Description>A .NET library for working with Revit Server REST API. Provides easy access to Revit Server operations including folder management, project operations, locking, and history tracking. Supports Revit Server versions 2012-2026.</Description>
     <Copyright>Copyright © 2025</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/mahach666/RevitServerNet</PackageProjectUrl>
-    <PackageTags>revit server api rest .net csharp autodesk bim</PackageTags>
-    <PackageReleaseNotes>Fixed README inclusion and updated GitHub repository links. Added proper package metadata for NuGet publication.</PackageReleaseNotes>
+    <PackageTags>revit server api rest .net csharp autodesk bim revit-server</PackageTags>
+    <PackageReleaseNotes>Improved package metadata and tags. Enhanced description with version support information.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/mahach666/RevitServerNet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IncludeSymbols>true</IncludeSymbols>
