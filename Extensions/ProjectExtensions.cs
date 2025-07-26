@@ -1,11 +1,8 @@
-using System.Threading.Tasks;
-using RevitServerNet.Models;
-using System.Runtime.Serialization.Json;
-using System.IO;
-using System.Text;
-using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
+using RevitServerNet.Models;
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace RevitServerNet.Extensions
 {
@@ -42,24 +39,6 @@ namespace RevitServerNet.Extensions
                 }
             }
             return result;
-        }
-
-        /// <summary>
-        /// Deserializes JSON to an object
-        /// </summary>
-        /// <typeparam name="T">Object type</typeparam>
-        /// <param name="json">JSON string</param>
-        /// <returns>Deserialized object</returns>
-        private static T DeserializeJson<T>(string json) where T : class
-        {
-            if (string.IsNullOrEmpty(json))
-                return null;
-
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as T;
-            }
         }
     }
 } 

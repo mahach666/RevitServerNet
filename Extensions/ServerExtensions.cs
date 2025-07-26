@@ -1,7 +1,7 @@
-using System.Threading.Tasks;
+using Newtonsoft.Json;
 using RevitServerNet.Models;
 using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Threading.Tasks;
 
 namespace RevitServerNet.Extensions
 {
@@ -69,7 +69,7 @@ namespace RevitServerNet.Extensions
             return serverInfo?.MaxNameLength ?? 0;
         }
 
-        // Gets server drive info (like Python getdriveinfo)
+        // Gets server drive info
         public static async Task<(long DriveSpace, long DriveFreeSpace)> GetServerDriveInfoAsync(this RevitServerApi api)
         {
             var contents = await api.GetRootFolderContentsAsync(); 

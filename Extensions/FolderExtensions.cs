@@ -1,9 +1,8 @@
-using System;
-using System.Threading.Tasks;
-using RevitServerNet.Models;
-using System.Collections.Generic;
-using System.Diagnostics;
 using Newtonsoft.Json;
+using RevitServerNet.Models;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace RevitServerNet.Extensions
 {
@@ -250,7 +249,7 @@ namespace RevitServerNet.Extensions
             return contents?.Models ?? new List<ModelInfo>();
         }
 
-        // Recursively walks the folder tree (like Python walk)
+        // Recursively walks the folder tree
         public static async Task<WalkResult> WalkAsync(this RevitServerApi api, string topPath = "|", bool includeFiles = true, bool includeModels = true, bool digModels = false)
         {
             var result = new WalkResult();

@@ -115,36 +115,6 @@ namespace RevitServerNet
         }
 
         /// <summary>
-        /// Gets a valid machine name for Revit Server API
-        /// </summary>
-        /// <returns>Valid machine name</returns>
-        private string GetValidMachineName()
-        {
-            var machineName = Environment.MachineName;
-            
-            // If machine name is empty, use alternative methods
-            if (string.IsNullOrWhiteSpace(machineName))
-            {
-                machineName = Environment.GetEnvironmentVariable("COMPUTERNAME") ?? "UNKNOWN";
-            }
-            
-            // Remove invalid characters and limit length
-            machineName = System.Text.RegularExpressions.Regex.Replace(machineName, @"[^\w\-]", "");
-            if (machineName.Length > 50) // Limit length
-            {
-                machineName = machineName.Substring(0, 50);
-            }
-            
-            // If after cleaning the name is empty, use default value
-            if (string.IsNullOrWhiteSpace(machineName))
-            {
-                machineName = "CLIENT-PC";
-            }
-            
-            return machineName;
-        }
-
-        /// <summary>
         /// Encodes path in API format (replaces separators with |)
         /// </summary>
         /// <param name="path">Path to file or folder</param>
