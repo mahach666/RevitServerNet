@@ -6,25 +6,31 @@
     <AssemblyName>RevitServerNet</AssemblyName>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>RevitServerNet</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>RevitServerNet Contributors</Authors>
     <Company>RevitServerNet Contributors</Company>
     <Product>RevitServerNet</Product>
     <Description>A .NET library for working with Revit Server REST API. Provides easy access to Revit Server operations including folder management, project operations, locking, and history tracking.</Description>
     <Copyright>Copyright © 2025</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/your-username/RevitServerNet</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/mahach666/RevitServerNet</PackageProjectUrl>
     <PackageTags>revit server api rest .net csharp autodesk bim</PackageTags>
-    <PackageReleaseNotes>Initial release of RevitServerNet library with full Revit Server REST API support.</PackageReleaseNotes>
-    <RepositoryUrl>https://github.com/your-username/RevitServerNet</RepositoryUrl>
+    <PackageReleaseNotes>Fixed README inclusion and updated GitHub repository links. Added proper package metadata for NuGet publication.</PackageReleaseNotes>
+    <RepositoryUrl>https://github.com/mahach666/RevitServerNet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="LICENSE.txt" Pack="true" PackagePath="/" />
   </ItemGroup>
 
 </Project>
