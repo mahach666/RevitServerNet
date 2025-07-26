@@ -1,5 +1,6 @@
 using System.Threading.Tasks;
 using RevitServerNet.Models;
+using System.Collections.Generic;
 using Newtonsoft.Json;
 
 namespace RevitServerNet.Extensions
@@ -52,11 +53,11 @@ namespace RevitServerNet.Extensions
         public static async Task<string> GetServerVersionAsync(this RevitServerApi api)
         {
             var serverInfo = await GetServerInfoAsync(api);
-            return serverInfo?.ServerVersion;
+            return serverInfo?.Version;
         }
 
         // Gets server roles
-        public static async Task<List<string>> GetServerRolesAsync(this RevitServerApi api)
+        public static async Task<List<ServerRole>> GetServerRolesAsync(this RevitServerApi api)
         {
             var serverInfo = await GetServerInfoAsync(api);
             return serverInfo?.Roles;
@@ -65,14 +66,14 @@ namespace RevitServerNet.Extensions
         public static async Task<int> GetMaximumModelNameLengthAsync(this RevitServerApi api)
         {
             var serverInfo = await GetServerInfoAsync(api);
-            return serverInfo?.MaximumModelNameLength ?? 0;
+            return serverInfo?.MaxNameLength ?? 0;
         }
 
         // Gets server drive info (like Python getdriveinfo)
         public static async Task<(long DriveSpace, long DriveFreeSpace)> GetServerDriveInfoAsync(this RevitServerApi api)
         {
             var contents = await api.GetRootFolderContentsAsync(); 
-            return (contents?.TotalSpace ?? 0, contents?.FreeSpace ?? 0);
+            return (contents?.DriveSpace ?? 0, contents?.DriveFreeSpace ?? 0);
         }
 
         private static T DeserializeJson<T>(string json) where T : class

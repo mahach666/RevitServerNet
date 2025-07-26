@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using RevitServerNet.Models;
 using System.Collections.Generic;
@@ -37,27 +38,114 @@ namespace RevitServerNet.Extensions
         public static async Task<OperationResult> CreateFolderAsync(this RevitServerApi api, string parentFolderPath, string folderName)
         {
             var encodedPath = RevitServerApi.EncodePath($"{parentFolderPath}/{folderName}");
-            var command = $"{encodedPath}";
+            var command = $"{encodedPath}"; // Empty command for PUT request
             var json = await api.PutAsync(command);
-            return DeserializeJson<OperationResult>(json) ?? new OperationResult { Success = !string.IsNullOrEmpty(json) };
+            
+            // Check if the response indicates success
+            var result = DeserializeJson<OperationResult>(json);
+            if (result != null)
+                return result;
+                
+            // If no structured response, check if the folder was actually created
+            try
+            {
+                var exists = await FolderExistsAsync(api, $"{parentFolderPath}/{folderName}");
+                return new OperationResult { Success = exists, Message = exists ? "Folder created successfully" : "Failed to create folder" };
+            }
+            catch
+            {
+                return new OperationResult { Success = false, Message = "Failed to create folder" };
+            }
         }
 
         // Deletes a folder
         public static async Task<OperationResult> DeleteFolderAsync(this RevitServerApi api, string folderPath)
         {
-            var encodedPath = RevitServerApi.EncodePath(folderPath);
-            var command = $"{encodedPath}";
-            var json = await api.DeleteAsync(command);
-            return DeserializeJson<OperationResult>(json) ?? new OperationResult { Success = !string.IsNullOrEmpty(json) };
+            try
+            {
+                // Don't allow deletion of root folder
+                if (folderPath == "|" || string.IsNullOrEmpty(folderPath))
+                {
+                    return new OperationResult { Success = false, Message = "Cannot delete root folder" };
+                }
+                
+                var encodedPath = RevitServerApi.EncodePath(folderPath);
+                var command = $"{encodedPath}"; // Empty command for DELETE request
+                var json = await api.DeleteAsync(command);
+                
+                // Check if the response indicates success
+                var result = DeserializeJson<OperationResult>(json);
+                if (result != null)
+                    return result;
+                    
+                // If no structured response, check if the folder was actually deleted
+                try
+                {
+                    var exists = await FolderExistsAsync(api, folderPath);
+                    return new OperationResult { Success = !exists, Message = exists ? "Failed to delete folder" : "Folder deleted successfully" };
+                }
+                catch
+                {
+                    return new OperationResult { Success = false, Message = "Failed to delete folder" };
+                }
+            }
+            catch (RevitServerApiException ex) when (ex.Message.Contains("MethodNotAllowed"))
+            {
+                return new OperationResult { Success = false, Message = "Delete operation not allowed - may require special permissions" };
+            }
+            catch (Exception ex)
+            {
+                return new OperationResult { Success = false, Message = $"Failed to delete folder: {ex.Message}" };
+            }
         }
 
         // Renames a folder
         public static async Task<OperationResult> RenameFolderAsync(this RevitServerApi api, string folderPath, string newName)
         {
-            var encodedPath = RevitServerApi.EncodePath(folderPath);
-            var command = $"{encodedPath}?newObjectName={newName}";
-            var json = await api.DeleteAsync(command);
-            return DeserializeJson<OperationResult>(json) ?? new OperationResult { Success = !string.IsNullOrEmpty(json) };
+            try
+            {
+                // Don't allow renaming of root folder
+                if (folderPath == "|" || string.IsNullOrEmpty(folderPath))
+                {
+                    return new OperationResult { Success = false, Message = "Cannot rename root folder" };
+                }
+                
+                var encodedPath = RevitServerApi.EncodePath(folderPath);
+                var command = $"{encodedPath}?newObjectName={newName}";
+                var json = await api.DeleteAsync(command);
+                
+                // Check if the response indicates success
+                var result = DeserializeJson<OperationResult>(json);
+                if (result != null)
+                    return result;
+                    
+                // If no structured response, check if the folder was actually renamed
+                try
+                {
+                    var parentPath = folderPath.Substring(0, folderPath.LastIndexOf('|'));
+                    if (string.IsNullOrEmpty(parentPath)) parentPath = "|";
+                    
+                    var oldExists = await FolderExistsAsync(api, folderPath);
+                    var newExists = await FolderExistsAsync(api, $"{parentPath}/{newName}");
+                    
+                    return new OperationResult { 
+                        Success = !oldExists && newExists, 
+                        Message = (!oldExists && newExists) ? "Folder renamed successfully" : "Failed to rename folder" 
+                    };
+                }
+                catch
+                {
+                    return new OperationResult { Success = false, Message = "Failed to rename folder" };
+                }
+            }
+            catch (RevitServerApiException ex) when (ex.Message.Contains("MethodNotAllowed"))
+            {
+                return new OperationResult { Success = false, Message = "Rename operation not allowed - may require special permissions" };
+            }
+            catch (Exception ex)
+            {
+                return new OperationResult { Success = false, Message = $"Failed to rename folder: {ex.Message}" };
+            }
         }
 
         // Gets model info
