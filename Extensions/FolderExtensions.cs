@@ -200,7 +200,15 @@ namespace RevitServerNet.Extensions
             visited.Add(folderPath);
             var contents = await GetFolderContentsAsync(api, folderPath);
             if (contents == null) return;
-            if (contents.Models != null) models.AddRange(contents.Models);
+            if (contents.Models != null)
+            {
+                foreach (var model in contents.Models)
+                {
+                    // Set the correct path for the model based on current folder path
+                    model.Path = folderPath == "|" ? "|" + model.Name : folderPath + "|" + model.Name;
+                    models.Add(model);
+                }
+            }
             if (contents.Folders != null)
             {
                 foreach (var folder in contents.Folders)
@@ -246,7 +254,16 @@ namespace RevitServerNet.Extensions
         public static async Task<List<ModelInfo>> ListModelsAsync(this RevitServerApi api, string folderPath = "|")
         {
             var contents = await GetFolderContentsAsync(api, folderPath);
-            return contents?.Models ?? new List<ModelInfo>();
+            if (contents?.Models == null) return new List<ModelInfo>();
+            
+            var models = new List<ModelInfo>();
+            foreach (var model in contents.Models)
+            {
+                // Set the correct path for the model based on current folder path
+                model.Path = folderPath == "|" ? "|" + model.Name : folderPath + "|" + model.Name;
+                models.Add(model);
+            }
+            return models;
         }
 
         // Recursively walks the folder tree
