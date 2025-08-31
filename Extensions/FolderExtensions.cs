@@ -1,5 +1,6 @@
 using Newtonsoft.Json;
 using RevitServerNet.Models;
+using RevitServerNet.Tools;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -331,6 +332,27 @@ namespace RevitServerNet.Extensions
             if (string.IsNullOrEmpty(json))
                 return null;
             return JsonConvert.DeserializeObject<T>(json);
+        }
+
+        // Creates a local RVT model using Autodesk RevitServerTool CLI
+        public static async Task<string> CreateLocalModelWithToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, bool overwrite = false, string toolPath = null)
+        {
+            if (string.IsNullOrWhiteSpace(modelPipePath))
+                throw new ArgumentException("Model pipe path is required", nameof(modelPipePath));
+            if (string.IsNullOrWhiteSpace(destinationFile))
+                throw new ArgumentException("Destination file is required", nameof(destinationFile));
+
+            var version = RevitServerToolClient.ParseVersionFromBaseUrl(api.BaseUrl);
+            var resolvedToolPath = string.IsNullOrWhiteSpace(toolPath) ? RevitServerToolClient.TryLocateToolPath(version) : toolPath;
+            if (string.IsNullOrWhiteSpace(resolvedToolPath))
+                throw new RevitServerToolException("RevitServerTool.exe not found. Provide toolPath or set REVITSERVER_TOOL_PATH.");
+
+            var host = new Uri(api.BaseUrl).Host;
+            var relative = RevitServerToolClient.ConvertPipePathToRelativeWindowsPath(modelPipePath);
+            var result = await RevitServerToolClient.CreateLocalModelAsync(resolvedToolPath, host, relative, destinationFile, overwrite);
+            if (!result.Success)
+                throw new RevitServerToolException($"RevitServerTool failed. ExitCode={result.ExitCode}. stderr={result.StandardError}");
+            return destinationFile;
         }
     }
 } 

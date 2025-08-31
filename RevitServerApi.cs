@@ -155,6 +155,8 @@ namespace RevitServerNet
                 throw new InvalidOperationException("Cannot create HTTP request");
 
             request.Method = method;
+            // Enable transparent decompression to reduce payload sizes (if server supports it)
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             // Set ContentType only for POST/PUT with data
             if (!string.IsNullOrEmpty(data) && (method == "POST" || method == "PUT"))
             {
