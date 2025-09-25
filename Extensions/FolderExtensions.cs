@@ -228,10 +228,14 @@ namespace RevitServerNet.Extensions
             visited.Add(folderPath);
             var contents = await GetFolderContentsAsync(api, folderPath);
             if (contents?.Folders == null) return;
+            foreach (var folder in contents.Folders)
+            {
+                folder.Path = folderPath == "|" ? "|" + folder.Name : folderPath + "|" + folder.Name;
+            }
             folders.AddRange(contents.Folders);
             foreach (var folder in contents.Folders)
             {
-                var childPath = folderPath == "|" ? "|" + folder.Name : folderPath + "|" + folder.Name;
+                var childPath = folder.Path;
                 if (!string.IsNullOrEmpty(childPath) && childPath != folderPath)
                     await GetFoldersRecursiveInternal(api, childPath, folders, visited);
             }
@@ -248,7 +252,12 @@ namespace RevitServerNet.Extensions
         public static async Task<List<FolderInfo>> ListFoldersAsync(this RevitServerApi api, string folderPath = "|")
         {
             var contents = await GetFolderContentsAsync(api, folderPath);
-            return contents?.Folders ?? new List<FolderInfo>();
+            if (contents?.Folders == null) return new List<FolderInfo>();
+            foreach (var folder in contents.Folders)
+            {
+                folder.Path = folderPath == "|" ? "|" + folder.Name : folderPath + "|" + folder.Name;
+            }
+            return contents.Folders;
         }
 
         // Gets only models in a folder
