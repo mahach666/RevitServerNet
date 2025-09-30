@@ -1,0 +1,11 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="RevitServerNet_CopyRSAssembliesForConsumers" AfterTargets="ResolveReferences">
+    <ItemGroup>
+      <!-- Copy RSAssemblies from the package into the consumer's output directory -->
+      <_ThisPackageRS Include="$(MSBuildThisFileDirectory)..\RSAssemblies\**\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ThisPackageRS)" DestinationFolder="$(OutDir)RSAssemblies\%(RecursiveDir)" SkipUnchangedFiles="true" Condition=" '@(_ThisPackageRS)' != '' " />
+  </Target>
+</Project>
+
+

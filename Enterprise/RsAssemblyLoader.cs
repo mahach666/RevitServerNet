@@ -107,6 +107,24 @@ namespace RevitServerNet.Enterprise
 
 		public static string TryLocateAssembliesDirectory(string versionHint)
 		{
+			// 1) Prefer assemblies packaged alongside this library under RSAssemblies/<version>
+			var baseDir = AppContext.BaseDirectory;
+			try
+			{
+				if (!string.IsNullOrWhiteSpace(versionHint))
+				{
+					var packaged = Path.Combine(baseDir, "RSAssemblies", versionHint);
+					var packagedFound = FindDirWithProxyDll(packaged);
+					if (!string.IsNullOrWhiteSpace(packagedFound)) return packagedFound;
+				}
+				// Also allow flat RSAssemblies directory without explicit version folder
+				var packagedFlat = Path.Combine(baseDir, "RSAssemblies");
+				var packagedFlatFound = FindDirWithProxyDll(packagedFlat);
+				if (!string.IsNullOrWhiteSpace(packagedFlatFound)) return packagedFlatFound;
+			}
+			catch { }
+
+			// 2) Fallback to scanning Autodesk install locations
 			var roots = new List<string>();
 			void Add(string p) { if (!string.IsNullOrWhiteSpace(p)) roots.Add(p); }
 			Add(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));

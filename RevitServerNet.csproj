@@ -28,6 +28,21 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="RSAssemblies\**\*.dll" Pack="true" PackagePath="RSAssemblies\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyPackagedRSAssemblies" AfterTargets="Build">
+    <ItemGroup>
+      <_PackagedRS Include="$(MSBuildThisFileDirectory)RSAssemblies\**\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PackagedRS)" DestinationFolder="$(OutDir)RSAssemblies\%(RecursiveDir)" SkipUnchangedFiles="true" Condition=" '@(_PackagedRS)' != '' " />
+  </Target>
+
+  <ItemGroup>
+    <Content Include="buildTransitive\RevitServerNet.props" Pack="true" PackagePath="buildTransitive\RevitServerNet.props" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="/" />
     <None Include="LICENSE.txt" Pack="true" PackagePath="/" />
   </ItemGroup>
