@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using RevitServerNet.Models;
 using RevitServerNet.Tools;
+using RevitServerNet.Enterprise;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -343,24 +344,29 @@ namespace RevitServerNet.Extensions
             return JsonConvert.DeserializeObject<T>(json);
         }
 
-        // Creates a local RVT model using Autodesk RevitServerTool CLI
-        public static async Task<string> CreateLocalModelWithToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, bool overwrite = false, string toolPath = null)
+        // Creates a local RVT model using RS.Enterprise proxies (no RevitServerTool.exe)
+        public static async Task<string> CreateLocalModelWithoutToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, string revitVersion = null, string assembliesPath = null, bool overwrite = false)
         {
             if (string.IsNullOrWhiteSpace(modelPipePath))
                 throw new ArgumentException("Model pipe path is required", nameof(modelPipePath));
             if (string.IsNullOrWhiteSpace(destinationFile))
                 throw new ArgumentException("Destination file is required", nameof(destinationFile));
 
-            var version = RevitServerToolClient.ParseVersionFromBaseUrl(api.BaseUrl);
-            var resolvedToolPath = string.IsNullOrWhiteSpace(toolPath) ? RevitServerToolClient.TryLocateToolPath(version) : toolPath;
-            if (string.IsNullOrWhiteSpace(resolvedToolPath))
-                throw new RevitServerToolException("RevitServerTool.exe not found. Provide toolPath or set REVITSERVER_TOOL_PATH.");
-
+            var version = revitVersion ?? VersionUtils.ParseVersionFromBaseUrl(api.BaseUrl) ?? "2022";
             var host = new Uri(api.BaseUrl).Host;
-            var relative = RevitServerToolClient.ConvertPipePathToRelativeWindowsPath(modelPipePath);
-            var result = await RevitServerToolClient.CreateLocalModelAsync(resolvedToolPath, host, relative, destinationFile, overwrite);
-            if (!result.Success)
-                throw new RevitServerToolException($"RevitServerTool failed. ExitCode={result.ExitCode}. stderr={result.StandardError}");
+
+            var exporter = new RsModelExporter();
+            var options = new RsModelExporterOptions
+            {
+                ServerHost = host,
+                ModelPipePath = modelPipePath,
+                DestinationFile = destinationFile,
+                RevitVersion = version,
+                AssembliesPath = assembliesPath,
+                Overwrite = overwrite
+            };
+
+            await exporter.ExportAsync(options);
             return destinationFile;
         }
     }
