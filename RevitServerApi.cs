@@ -158,9 +158,17 @@ namespace RevitServerNet
             // Enable transparent decompression to reduce payload sizes (if server supports it)
             request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             // Set ContentType only for POST/PUT with data
-            if (!string.IsNullOrEmpty(data) && (method == "POST" || method == "PUT"))
+            if (method == "POST" || method == "PUT")
             {
-                request.ContentType = "application/json";
+                if (!string.IsNullOrEmpty(data))
+                {
+                    request.ContentType = "application/json";
+                }
+                else
+                {
+                    // Some RS endpoints require explicit Content-Length: 0
+                    request.ContentLength = 0;
+                }
             }
             // Add required headers for Revit Server API
             var machineName = Environment.MachineName;

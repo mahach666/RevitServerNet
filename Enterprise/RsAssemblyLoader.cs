@@ -91,23 +91,35 @@ namespace RevitServerNet.Enterprise
 			var loaded = new RsAssemblies(baseDir);
 			foreach (var fileName in RequiredAssemblies)
 			{
-				var path = Directory.GetFiles(baseDir, fileName, SearchOption.AllDirectories).FirstOrDefault();
-				if (path != null && File.Exists(path))
+				var candidates = Directory.GetFiles(baseDir, fileName, SearchOption.AllDirectories);
+				string path = null;
+				if (candidates != null && candidates.Length > 0)
+				{
+					// Prefer a build from a folder named 'ChangedLibraries' if present (used by some distributions)
+					path = candidates
+						.OrderByDescending(p => p.IndexOf("ChangedLibraries", StringComparison.OrdinalIgnoreCase) >= 0)
+						.ThenByDescending(p => new FileInfo(p).LastWriteTimeUtc)
+						.FirstOrDefault();
+				}
+				if (!string.IsNullOrEmpty(path) && File.Exists(path))
 				{
 					var asm = Assembly.LoadFrom(path);
 					loaded.Add(asm);
 				}
 			}
 			// Sanity check: must have proxy and service contract
-			if (loaded.FindAssembly("RS.Enterprise.Common.ClientServer.Proxy.dll") == null || loaded.FindAssembly("RS.Enterprise.Common.ClientServer.ServiceContract.Model.dll") == null)
-				throw new InvalidOperationException("Failed to load required RS assemblies (Proxy/ServiceContract.Model). Check assembliesPath.");
+			var missing = new List<string>();
+			if (loaded.FindAssembly("RS.Enterprise.Common.ClientServer.Proxy.dll") == null) missing.Add("RS.Enterprise.Common.ClientServer.Proxy.dll");
+			if (loaded.FindAssembly("RS.Enterprise.Common.ClientServer.ServiceContract.Model.dll") == null) missing.Add("RS.Enterprise.Common.ClientServer.ServiceContract.Model.dll");
+			if (missing.Count > 0)
+				throw new InvalidOperationException($"Failed to load required RS assemblies: {string.Join(", ", missing)}. Base='{baseDir}'.");
 
 			return loaded;
 		}
 
 		public static string TryLocateAssembliesDirectory(string versionHint)
 		{
-			// 1) Prefer assemblies packaged alongside this library under RSAssemblies/<version>
+			// 1) Prefer assemblies packaged alongside the app under RSAssemblies/<version>
 			var baseDir = AppContext.BaseDirectory;
 			try
 			{
@@ -121,6 +133,25 @@ namespace RevitServerNet.Enterprise
 				var packagedFlat = Path.Combine(baseDir, "RSAssemblies");
 				var packagedFlatFound = FindDirWithProxyDll(packagedFlat);
 				if (!string.IsNullOrWhiteSpace(packagedFlatFound)) return packagedFlatFound;
+			}
+			catch { }
+
+			// 1.1) Assemblies packaged next to this library's DLL (when referenced as project or via NuGet)
+			try
+			{
+				var libDir = Path.GetDirectoryName(typeof(RsAssemblyLoader).Assembly.Location);
+				if (!string.IsNullOrWhiteSpace(libDir))
+				{
+					if (!string.IsNullOrWhiteSpace(versionHint))
+					{
+						var packaged = Path.Combine(libDir, "RSAssemblies", versionHint);
+						var found = FindDirWithProxyDll(packaged);
+						if (!string.IsNullOrWhiteSpace(found)) return found;
+					}
+					var packagedFlat = Path.Combine(libDir, "RSAssemblies");
+					var foundFlat = FindDirWithProxyDll(packagedFlat);
+					if (!string.IsNullOrWhiteSpace(foundFlat)) return foundFlat;
+				}
 			}
 			catch { }
 
