@@ -1,7 +1,9 @@
 using Newtonsoft.Json;
 using RevitServerNet.Models;
 using RevitServerNet.Tools;
+#if NETFRAMEWORK
 using RevitServerNet.Enterprise;
+#endif
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -345,6 +347,7 @@ namespace RevitServerNet.Extensions
         }
 
         // Creates a local RVT model using RS.Enterprise proxies (no RevitServerTool.exe)
+#if NETFRAMEWORK
         public static async Task<string> CreateLocalModelWithoutToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, string revitVersion = null, string assembliesPath = null, bool overwrite = false)
         {
             if (string.IsNullOrWhiteSpace(modelPipePath))
@@ -369,5 +372,6 @@ namespace RevitServerNet.Extensions
             await exporter.ExportAsync(options);
             return destinationFile;
         }
+#endif
     }
 } 

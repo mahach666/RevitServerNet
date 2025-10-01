@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFrameworks>net48;net8.0</TargetFrameworks>
     <RootNamespace>RevitServerNet</RootNamespace>
     <AssemblyName>RevitServerNet</AssemblyName>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
@@ -15,7 +15,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/mahach666/RevitServerNet</PackageProjectUrl>
     <PackageTags>revit server api rest .net csharp autodesk bim revit-server</PackageTags>
-    <PackageReleaseNotes>Improved package metadata and tags. Enhanced description with version support information.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add multi-targeting (net48; net8.0). RS Enterprise exporter available on net48 only; REST APIs available on both.</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/mahach666/RevitServerNet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IncludeSymbols>true</IncludeSymbols>
@@ -48,8 +48,15 @@
     <None Include="LICENSE.txt" Pack="true" PackagePath="/" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
     <Reference Include="System.ServiceModel" />
+  </ItemGroup>
+
+  <!-- Exclude RS Enterprise implementation files from net8.0 build -->
+  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
+    <Compile Remove="Enterprise\**\*.cs" />
+    <Compile Remove="Extensions\ExportExtensions.cs" />
+    <Compile Remove="ModelExport.cs" />
   </ItemGroup>
 
 </Project>

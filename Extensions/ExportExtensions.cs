@@ -23,6 +23,9 @@ namespace RevitServerNet.Extensions
             var host = InferHostFromBaseUrl(api.BaseUrl);
             if (string.IsNullOrWhiteSpace(host)) throw new InvalidOperationException("Cannot infer server host from RevitServerApi.BaseUrl");
 
+#if !NETFRAMEWORK
+            throw new PlatformNotSupportedException("ExportModelAsync is only available on .NET Framework (net48). Use RevitServerNetTest net48 runner or call REST.");
+#else
             // Call public exporter
             var options = new ModelExporterOptions
             {
@@ -34,6 +37,7 @@ namespace RevitServerNet.Extensions
                 Overwrite = overwrite,
             };
             return await ModelExporter.ExportAsync(options, bytesProgress);
+#endif
         }
 
         private static string InferVersionFromBaseUrl(string baseUrl)
@@ -51,5 +55,6 @@ namespace RevitServerNet.Extensions
         }
     }
 }
+
 
 
