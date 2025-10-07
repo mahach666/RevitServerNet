@@ -22,6 +22,11 @@ namespace RevitServerNet.Extensions
             var version = InferVersionFromBaseUrl(api.BaseUrl) ?? "2019";
             var host = InferHostFromBaseUrl(api.BaseUrl);
             if (string.IsNullOrWhiteSpace(host)) throw new InvalidOperationException("Cannot infer server host from RevitServerApi.BaseUrl");
+            
+            // Debug output
+            System.Diagnostics.Debug.WriteLine($"[ExportModelAsync] BaseUrl: {api.BaseUrl}");
+            System.Diagnostics.Debug.WriteLine($"[ExportModelAsync] Detected version: {version}");
+            System.Diagnostics.Debug.WriteLine($"[ExportModelAsync] Host: {host}");
 
 #if !NETFRAMEWORK
             throw new PlatformNotSupportedException("ExportModelAsync is only available on .NET Framework (net48). Use RevitServerNetTest net48 runner or call REST.");
@@ -43,7 +48,7 @@ namespace RevitServerNet.Extensions
         private static string InferVersionFromBaseUrl(string baseUrl)
         {
             if (string.IsNullOrWhiteSpace(baseUrl)) return null;
-            var m = Regex.Match(baseUrl, @"RevitServerAdminRESTService(\\d{4})", RegexOptions.IgnoreCase);
+            var m = Regex.Match(baseUrl, @"RevitServerAdminRESTService(\d{4})", RegexOptions.IgnoreCase);
             return m.Success ? m.Groups[1].Value : null;
         }
 
