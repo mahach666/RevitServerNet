@@ -9,6 +9,7 @@ A .NET library for working with Revit Server REST API. Provides easy access to R
 - **Project Management**: Handle project operations and metadata
 - **Locking System**: Manage file locks and permissions
 - **History Tracking**: Access project history and version information
+- **Direct Export**: Convert Revit Server models to RVT using RS assemblies (net48)
 - **Multi-Version Support**: Supports Revit Server versions from 2012 to 2026
 - **Async Operations**: All API calls are asynchronous for better performance
 
@@ -113,6 +114,57 @@ await api.UnlockFileAsync("/Projects/MyProject/file.rvt");
 // Get lock information
 var lockInfo = await api.GetLockInfoAsync("/Projects/MyProject/file.rvt");
 ```
+
+## Direct export from Revit Server (RS Enterprise API)
+
+RevitServerNet can export a model directly to a local RVT file using the RS Enterprise assemblies — without calling `RevitServerTool.exe`. This works **only on .NET Framework 4.8** because Autodesk’s RS libraries target net48.
+
+Prerequisites:
+- Windows with .NET Framework 4.8
+- Access to the Revit Server host
+- RS assemblies for the target version available in `RSAssemblies/<year>` (shipped in the repo) or in a custom folder you pass via `AssembliesPath`
+
+### Minimal net48 example (direct call)
+```csharp
+using RevitServerNet;
+
+var options = new ModelExporterOptions
+{
+    ServerHost = "revit-server.local",
+    ModelPipePath = "|Projects|Demo|Model.rvt",          // pipe or Windows-style path
+    DestinationFile = @"C:\Exports\Demo.rvt",
+    RevitVersion = "2024",
+    AssembliesPath = @"C:\path\to\RSAssemblies\2024",    // optional: autodetected if bundled folder is present
+    Overwrite = true
+};
+
+var resultPath = await ModelExporter.ExportAsync(
+    options,
+    new Progress<long>(bytes => Console.WriteLine($"Downloaded {bytes} bytes"))
+);
+Console.WriteLine($"Exported to: {resultPath}");
+```
+
+### Using `RevitServerApi` extension (infers host/version)
+```csharp
+using RevitServerNet;
+using RevitServerNet.Extensions;
+
+var api = new RevitServerApi("revit-server.local", "user", serverVersion: "2024");
+await api.ExportModelAsync(
+    modelPath: "|Projects|Demo|Model.rvt",
+    destinationFile: @"C:\Exports\Demo.rvt",
+    overwrite: true
+);
+```
+Notes:
+- The extension infers host/version from `api.BaseUrl`. It throws `PlatformNotSupportedException` on non-net48 targets.
+- Use pipe-format paths (`|Projects|...|file.rvt`) or Windows-style relative paths (`Projects\...\file.rvt`).
+
+### Reference implementation
+See `AnlaxRSExportService` (net48 WebAPI + CLI) for a working sample that wraps `ModelExporter`:
+- CLI: `AnlaxRSExportService.exe --export <server> <pipePath> <localPath> <revitVersion> [rsAssembliesPath]`
+- HTTP: `POST http://localhost:3074/api/export/export` with JSON matching `ModelExporterOptions` fields.
 
 ## API Reference
 
