@@ -15,7 +15,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/mahach666/RevitServerNet</PackageProjectUrl>
     <PackageTags>revit server api rest .net csharp autodesk bim revit-server</PackageTags>
-    <PackageReleaseNotes>Add RevitServerUiApi (Admin UI API) + UI DTO models. Generate AdminRESTService and Admin UI base paths by version (<=2012 base name, otherwise suffix year).</PackageReleaseNotes>
+    <PackageReleaseNotes>Add RevitServerUiApi (Admin UI API) + UI DTO models. Generate AdminRESTService and Admin UI base paths by version (up to 2012 base name, otherwise suffix year).</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/mahach666/RevitServerNet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IncludeSymbols>true</IncludeSymbols>
