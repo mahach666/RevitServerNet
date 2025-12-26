@@ -6,7 +6,7 @@
     <AssemblyName>RevitServerNet</AssemblyName>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>RevitServerNet</PackageId>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Authors>RevitServerNet Contributors</Authors>
     <Company>RevitServerNet Contributors</Company>
     <Product>RevitServerNet</Product>
@@ -15,7 +15,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/mahach666/RevitServerNet</PackageProjectUrl>
     <PackageTags>revit server api rest .net csharp autodesk bim revit-server</PackageTags>
-    <PackageReleaseNotes>Add multi-targeting (net48; net8.0). RS Enterprise exporter available on net48 only; REST APIs available on both.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add RevitServerUiApi (Admin UI API) + UI DTO models. Generate AdminRESTService and Admin UI base paths by version (<=2012 base name, otherwise suffix year).</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/mahach666/RevitServerNet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IncludeSymbols>true</IncludeSymbols>
@@ -45,6 +45,7 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="CHANGES.md" Pack="true" PackagePath="/" />
     <None Include="LICENSE.txt" Pack="true" PackagePath="/" />
   </ItemGroup>
 
