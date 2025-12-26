@@ -14,26 +14,28 @@ namespace RevitServerNet
     {
         private readonly string _baseUrl;
         private readonly string _userName;
-        
-        // Official API paths for different versions (from Autodesk sample)
-        private static readonly Dictionary<string, string> SupportedVersions = new Dictionary<string, string>
+
+        // Official Admin REST virtual directory naming:
+        // - version <= 2012: /RevitServerAdminRESTService/AdminRESTService.svc
+        // - version > 2012:  /RevitServerAdminRESTService{YEAR}/AdminRESTService.svc
+        private static string GetAdminRestServicePath(string serverVersion)
         {
-            {"2012", "/RevitServerAdminRESTService/AdminRESTService.svc"},
-            {"2013", "/RevitServerAdminRESTService2013/AdminRESTService.svc"},
-            {"2014", "/RevitServerAdminRESTService2014/AdminRESTService.svc"},
-            {"2015", "/RevitServerAdminRESTService2015/AdminRESTService.svc"},
-            {"2016", "/RevitServerAdminRESTService2016/AdminRESTService.svc"},
-            {"2017", "/RevitServerAdminRESTService2017/AdminRESTService.svc"},
-            {"2018", "/RevitServerAdminRESTService2018/AdminRESTService.svc"},
-            {"2019", "/RevitServerAdminRESTService2019/AdminRESTService.svc"},
-            {"2020", "/RevitServerAdminRESTService2020/AdminRESTService.svc"},
-            {"2021", "/RevitServerAdminRESTService2021/AdminRESTService.svc"},
-            {"2022", "/RevitServerAdminRESTService2022/AdminRESTService.svc"},
-            {"2023", "/RevitServerAdminRESTService2023/AdminRESTService.svc"},
-            {"2024", "/RevitServerAdminRESTService2024/AdminRESTService.svc"},
-            {"2025", "/RevitServerAdminRESTService2025/AdminRESTService.svc"},
-            {"2026", "/RevitServerAdminRESTService2026/AdminRESTService.svc"},
-        };
+            if (string.IsNullOrWhiteSpace(serverVersion))
+                throw new ArgumentException("Server version cannot be null or empty", nameof(serverVersion));
+
+            if (!int.TryParse(serverVersion, out var year))
+                throw new ArgumentException($"Server version '{serverVersion}' is not a valid year.", nameof(serverVersion));
+
+            // Library historically targets RS 2012+.
+            if (year < 2012)
+                throw new ArgumentException("Server version must be >= 2012.", nameof(serverVersion));
+
+            var dir = year <= 2012
+                ? "RevitServerAdminRESTService"
+                : $"RevitServerAdminRESTService{year}";
+
+            return $"/{dir}/AdminRESTService.svc";
+        }
 
         /// <summary>
         /// Initializes a new instance of RevitServerApi
@@ -48,12 +50,9 @@ namespace RevitServerNet
                 throw new ArgumentException("Host cannot be null or empty", nameof(host));
             if (string.IsNullOrEmpty(userName))
                 throw new ArgumentException("UserName cannot be null or empty", nameof(userName));
-            
-            if (!SupportedVersions.ContainsKey(serverVersion))
-                throw new ArgumentException($"Unsupported server version '{serverVersion}'. Supported versions: {string.Join(", ", SupportedVersions.Keys)}", nameof(serverVersion));
 
             var protocol = useHttps ? "https" : "http";
-            var servicePath = SupportedVersions[serverVersion];
+            var servicePath = GetAdminRestServicePath(serverVersion);
             _baseUrl = $"{protocol}://{host}{servicePath}";
             _userName = userName;
         }

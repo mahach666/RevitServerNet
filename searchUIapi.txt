@@ -1,0 +1,171 @@
+http://192.168.1.149/RevitServerAdmin2022/api/model/details?id=192.168.1.149%5Cmain%5CtestFile.rvt
+GET
+{LastUpdatedBy: "maxah", SupportedSize: 45869, ProductVersion: "2022",…}
+DateCreated: "2025-12-26T22:47:46.2329485Z"
+DateModified: "2025-12-26T22:47:48Z"
+Id: "192.168.1.149\\main\\testFile.rvt"
+IsAlive: true
+LastUpdatedBy: "maxah"
+LockContext: null
+LockStatus: "Unlocked"
+Name: "testFile.rvt"
+ProductVersion: "2022"
+ServerPath: "main\\testFile.rvt"
+Size: 6653519
+SupportedSize: 45869
+Type: "rs-model"
+
+http://192.168.1.149/RevitServerAdmin2022/api/folder/ItemLockData?id=192.168.1.149&placeholder=
+GET
+{type: "Server", path: "192.168.1.149", lockStatus: "Unlocked", lockContext: null}
+lockContext: null
+lockStatus: "Unlocked"
+path: "192.168.1.149"
+type: "Server"
+
+http://192.168.1.149/RevitServerAdmin2022/api/model/ModelHistories?type=rs-model&id=192.168.1.149%5Cmain%5CtestFile.rvt
+GET
+[{Comment: "", Date: "2025-12-26T22:47:48Z", ModelSize: 6653519, OverwrittenByHistoryNumber: 0,…}]
+0: {Comment: "", Date: "2025-12-26T22:47:48Z", ModelSize: 6653519, OverwrittenByHistoryNumber: 0,…}
+Comment: ""
+Date: "2025-12-26T22:47:48Z"
+ModelSize: 6653519
+OverwrittenByHistoryNumber: 0
+SupportSize: 48185
+User: "maxah"
+VersionNumber: 1
+
+http://192.168.1.149/RevitServerAdmin2022/api/folder/SubItems?id=192.168.1.149%5Cmain&depth=2
+GET
+{
+    "Id": "192.168.1.149\\main",
+    "IsAlive": true,
+    "Name": "main",
+    "ServerPath": "main",
+    "Type": "rs-folder",
+    "LockStatus": "Unlocked",
+    "LockContext": null,
+    "Children": [
+        {
+            "Id": "192.168.1.149\\main\\testFile.rvt",
+            "IsAlive": true,
+            "Name": "testFile.rvt",
+            "ServerPath": "main\\testFile.rvt",
+            "Type": "rs-model",
+            "LockStatus": "Unlocked",
+            "LockContext": null,
+            "Children": null
+        },
+        {
+            "Id": "192.168.1.149\\main\\АР",
+            "IsAlive": true,
+            "Name": "АР",
+            "ServerPath": "main\\АР",
+            "Type": "rs-folder",
+            "LockStatus": "Unlocked",
+            "LockContext": null,
+            "Children": [
+                {
+                    "Id": "192.168.1.149\\main\\АР\\АР_1.rvt",
+                    "IsAlive": true,
+                    "Name": "АР_1.rvt",
+                    "ServerPath": "main\\АР\\АР_1.rvt",
+                    "Type": "rs-model",
+                    "LockStatus": "Unlocked",
+                    "LockContext": null,
+                    "Children": null
+                }
+            ]
+        },
+        {
+            "Id": "192.168.1.149\\main\\ВК",
+            "IsAlive": true,
+            "Name": "ВК",
+            "ServerPath": "main\\ВК",
+            "Type": "rs-folder",
+            "LockStatus": "Unlocked",
+            "LockContext": null,
+            "Children": [
+                {
+                    "Id": "192.168.1.149\\main\\ВК\\ВК_1.rvt",
+                    "IsAlive": true,
+                    "Name": "ВК_1.rvt",
+                    "ServerPath": "main\\ВК\\ВК_1.rvt",
+                    "Type": "rs-model",
+                    "LockStatus": "Unlocked",
+                    "LockContext": null,
+                    "Children": null
+                }
+            ]
+        },
+        {
+            "Id": "192.168.1.149\\main\\КР",
+            "IsAlive": true,
+            "Name": "КР",
+            "ServerPath": "main\\КР",
+            "Type": "rs-folder",
+            "LockStatus": "Unlocked",
+            "LockContext": null,
+            "Children": [
+                {
+                    "Id": "192.168.1.149\\main\\КР\\КР.rvt",
+                    "IsAlive": true,
+                    "Name": "КР.rvt",
+                    "ServerPath": "main\\КР\\КР.rvt",
+                    "Type": "rs-model",
+                    "LockStatus": "Unlocked",
+                    "LockContext": null,
+                    "Children": null
+                }
+            ]
+        },
+        {
+            "Id": "192.168.1.149\\main\\ОВ",
+            "IsAlive": true,
+            "Name": "ОВ",
+            "ServerPath": "main\\ОВ",
+            "Type": "rs-folder",
+            "LockStatus": "Unlocked",
+            "LockContext": null,
+            "Children": [
+                {
+                    "Id": "192.168.1.149\\main\\ОВ\\ОВ_1.rvt",
+                    "IsAlive": true,
+                    "Name": "ОВ_1.rvt",
+                    "ServerPath": "main\\ОВ\\ОВ_1.rvt",
+                    "Type": "rs-model",
+                    "LockStatus": "Unlocked",
+                    "LockContext": null,
+                    "Children": null
+                }
+            ]
+        }
+    ]
+}
+
+http://192.168.1.149/RevitServerAdmin2022/api/operation?operationtype=DeleteOrRename&id=192.168.1.149%5Cmain%5CtestFile.rvt&newName=testFile2.rvt
+DELETE
+
+http://192.168.1.149/RevitServerAdmin2022/api/folder/copyOrMove?id=192.168.1.149%5Cmain%5CtestFile2.rvt&destinationid=192.168.1.149%5Cmain%5CtestFile2%20-%20Copy.rvt&pasteAction=Copy&replaceExisting=false
+POST
+"http://192.168.1.149/192.168.1.149/main/testFile2 - Copy.rvt"
+
+http://192.168.1.149/RevitServerAdmin2022/api/operation?operationType=Lock&id=192.168.1.149%5Cmain%5CtestFile2%20-%20Copy.rvt
+PUT
+
+http://192.168.1.149/RevitServerAdmin2022/api/operation?operationtype=Unlock&id=192.168.1.149%5Cmain%5CtestFile2%20-%20Copy.rvt&itemMustExist=true
+DELETE
+
+http://192.168.1.149/RevitServerAdmin2022/api/operation?operationtype=DeleteOrRename&id=192.168.1.149%5Cmain%5CtestFile2%20-%20Copy.rvt
+DELETE
+
+http://192.168.1.149/RevitServerAdmin2022/api/folder/copyOrMove?id=192.168.1.149%5Cmain%5CtestFile2.rvt&destinationid=192.168.1.149%5Cmain%5C%D0%9E%D0%92%5CtestFile2.rvt&pasteAction=Move&replaceExisting=false
+POST
+"http://192.168.1.149/192.168.1.149/main/ОВ/testFile2.rvt"
+
+http://192.168.1.149/RevitServerAdmin2022/api/folder/createfolder?&id=192.168.1.149%5Cmain%5CNew%20Folder
+PUT
+"http://192.168.1.149/192.168.1.149/main/New Folder"
+
+http://192.168.1.149/RevitServerAdmin2022/api/operation?operationtype=DeleteOrRename&id=192.168.1.149%5Cmain%5CNew%20Folder&newName=New%20Folder99
+DELETE
