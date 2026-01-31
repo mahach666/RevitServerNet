@@ -9,7 +9,7 @@ A .NET library for working with Revit Server REST API. Provides easy access to R
 - **Project Management**: Handle project operations and metadata
 - **Locking System**: Manage file locks and permissions
 - **History Tracking**: Access project history and version information
-- **Direct Export**: Convert Revit Server models to RVT using RS assemblies (net48)
+- **Direct Export**: Convert Revit Server models to RVT using RS assemblies (net48/net6/net8)
 - **Multi-Version Support**: Supports Revit Server versions from 2012 to 2026
 - **Async Operations**: All API calls are asynchronous for better performance
 
@@ -50,7 +50,7 @@ var folders = await api.GetFoldersAsync("/path/to/folder");
 
 ## Requirements
 
-- .NET Framework 4.8
+- .NET Framework 4.8 or .NET 6/8
 - Newtonsoft.Json 13.0.3
 
 ## Usage Examples
@@ -117,14 +117,14 @@ var lockInfo = await api.GetLockInfoAsync("/Projects/MyProject/file.rvt");
 
 ## Direct export from Revit Server (RS Enterprise API)
 
-RevitServerNet can export a model directly to a local RVT file using the RS Enterprise assemblies — without calling `RevitServerTool.exe`. This works **only on .NET Framework 4.8** because Autodesk’s RS libraries target net48.
+RevitServerNet can export a model directly to a local RVT file using the RS Enterprise assemblies — without calling `RevitServerTool.exe`. This works on **.NET Framework 4.8, .NET 6, and .NET 8** on Windows.
 
 Prerequisites:
-- Windows with .NET Framework 4.8
+- Windows with .NET Framework 4.8 or .NET 6/8
 - Access to the Revit Server host
 - RS assemblies for the target version available in `RSAssemblies/<year>` (shipped in the repo) or in a custom folder you pass via `AssembliesPath`
 
-### Minimal net48 example (direct call)
+### Minimal example (direct call)
 ```csharp
 using RevitServerNet;
 
@@ -158,7 +158,7 @@ await api.ExportModelAsync(
 );
 ```
 Notes:
-- The extension infers host/version from `api.BaseUrl`. It throws `PlatformNotSupportedException` on non-net48 targets.
+- The extension infers host/version from `api.BaseUrl`. It throws `PlatformNotSupportedException` on targets other than net48/net6/net8.
 - Use pipe-format paths (`|Projects|...|file.rvt`) or Windows-style relative paths (`Projects\...\file.rvt`).
 
 ### Reference implementation
