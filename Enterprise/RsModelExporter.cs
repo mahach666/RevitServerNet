@@ -5,6 +5,10 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Xml;
+using System.ServiceModel;
+using System.ServiceModel.Channels;
+using System.ServiceModel.Description;
 
 namespace RevitServerNet.Enterprise
 {
@@ -576,8 +580,14 @@ namespace RevitServerNet.Enterprise
 				catch { }
 				clientProxy = GetGenericClientProxy(assemblies, revitVersion, serverHost, useStreamed: false);
 			}
-			var proxy = GetProxyFromClientProxy(clientProxy);
 			var iModelServiceType = assemblies.GetType("Autodesk.RevitServer.Enterprise.Common.ClientServer.ServiceContract.Model.IModelService");
+			if (iModelServiceType == null) throw new TypeLoadException("IModelService type not found");
+			
+			var proxy = GetProxyFromClientProxy(clientProxy);
+			TryConfigureClientProxyBinding(proxy);
+			
+			// If channel is already open, we need to recreate with proper binding
+			proxy = TryRecreateProxyWithLargeMessageSupport(clientProxy, proxy, iModelServiceType, serverHost);
 		// Resolve FileDownloadRequestMessage from available assemblies
 		Type requestType;
 		try
@@ -1026,7 +1036,19 @@ namespace RevitServerNet.Enterprise
 				if (genericMethod == null) throw new MissingMethodException($"{methodName} method not found");
 				
 				var typedMethod = genericMethod.MakeGenericMethod(iModelServiceType);
-				return typedMethod.Invoke(proxyProvider, new Object[] { host });
+				var clientProxy = typedMethod.Invoke(proxyProvider, new Object[] { host });
+				TryConfigureClientProxyBinding(clientProxy);
+				// Some proxy providers expose the actual channel via Proxy property
+				try
+				{
+					var innerProxy = GetProxyFromClientProxy(clientProxy);
+					TryConfigureClientProxyBinding(innerProxy);
+				}
+				catch
+				{
+					// Ignore: not all proxies expose Proxy property at this stage
+				}
+				return clientProxy;
 			}
 			catch (AmbiguousMatchException ex)
 			{
@@ -1036,6 +1058,589 @@ namespace RevitServerNet.Enterprise
 				System.IO.File.AppendAllText(logPath, $"Stack trace: {ex.StackTrace}\n");
 				throw new InvalidOperationException($"GetGenericClientProxy ambiguity: {ex.Message}", ex);
 			}
+		}
+
+		private const long MaxMessageSizeBytes = 5L * 1024L * 1024L * 1024L; // 5 GB
+		private const int MaxBufferSizeBytes = int.MaxValue; // max supported buffer size
+
+		private static void TryConfigureClientProxyBinding(object clientProxy)
+		{
+			if (clientProxy == null) return;
+			try
+			{
+				var binding = TryGetBindingFromClientProxy(clientProxy);
+				LogBindingDiagnostics("TryConfigureClientProxyBinding_Before", clientProxy, binding);
+				if (binding == null) return;
+				ConfigureBindingLimits(binding);
+				LogBindingDiagnostics("TryConfigureClientProxyBinding_After", clientProxy, binding);
+			}
+			catch (Exception ex)
+			{
+				// Log binding configuration failures for debugging
+				try
+				{
+					var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_BindingConfig_Error.txt");
+					System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] TryConfigureClientProxyBinding error: {ex.Message}\n{ex.StackTrace}\n\n");
+				}
+				catch { }
+			}
+		}
+
+		private static void LogBindingDiagnostics(string context, object clientProxy, Binding binding)
+		{
+			try
+			{
+				var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_Binding_Diagnostics.txt");
+				var sb = new System.Text.StringBuilder();
+				sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] === {context} ===");
+				sb.AppendLine($"ClientProxy type: {clientProxy?.GetType().FullName ?? "null"}");
+				sb.AppendLine($"Binding type: {binding?.GetType().FullName ?? "null"}");
+				
+				if (binding != null)
+				{
+					sb.AppendLine($"Binding.Name: {binding.Name}");
+					sb.AppendLine($"Binding.Scheme: {binding.Scheme}");
+					
+					if (binding is NetTcpBinding netTcp)
+					{
+						sb.AppendLine($"NetTcpBinding.MaxReceivedMessageSize: {netTcp.MaxReceivedMessageSize}");
+						sb.AppendLine($"NetTcpBinding.MaxBufferSize: {netTcp.MaxBufferSize}");
+						sb.AppendLine($"NetTcpBinding.TransferMode: {netTcp.TransferMode}");
+					}
+					else if (binding is CustomBinding custom)
+					{
+						sb.AppendLine($"CustomBinding elements ({custom.Elements.Count}):");
+						foreach (var elem in custom.Elements)
+						{
+							sb.AppendLine($"  - {elem.GetType().Name}");
+							if (elem is TransportBindingElement transport)
+							{
+								sb.AppendLine($"    MaxReceivedMessageSize: {transport.MaxReceivedMessageSize}");
+							}
+						}
+					}
+				}
+
+				// Check if channel is already open
+				if (clientProxy is ICommunicationObject commObj)
+				{
+					sb.AppendLine($"CommunicationState: {commObj.State}");
+				}
+				
+				sb.AppendLine();
+				System.IO.File.AppendAllText(logPath, sb.ToString());
+			}
+			catch { }
+		}
+
+		private static object TryRecreateProxyWithLargeMessageSupport(object clientProxy, object innerProxy, Type iModelServiceType, string serverHost)
+		{
+			try
+			{
+				// Check if the channel is already opened - if so, binding changes won't take effect
+				if (!(innerProxy is ICommunicationObject commObj) || commObj.State != CommunicationState.Opened)
+				{
+					LogBindingError("TryRecreateProxy", $"Channel not opened yet (State={((innerProxy as ICommunicationObject)?.State.ToString() ?? "not ICommunicationObject")}), binding config should work");
+					return innerProxy; // Not opened yet, binding config should work
+				}
+
+				LogBindingError("TryRecreateProxy", $"Channel is OPENED, attempting to recreate with large message binding");
+
+				// Get the endpoint info from existing proxy - try multiple sources
+				LogBindingError("TryRecreateProxy", "Attempting to get endpoint address...");
+				var endpointAddress = TryGetEndpointAddress(clientProxy);
+				if (endpointAddress != null)
+				{
+					LogBindingError("TryRecreateProxy", $"Got endpoint from clientProxy: {endpointAddress.Uri}");
+				}
+				else
+				{
+					endpointAddress = TryGetEndpointAddress(innerProxy);
+					if (endpointAddress != null)
+					{
+						LogBindingError("TryRecreateProxy", $"Got endpoint from innerProxy: {endpointAddress.Uri}");
+					}
+				}
+				
+				if (endpointAddress == null)
+				{
+					// Cannot create proxy without knowing the correct endpoint - return original
+					LogBindingError("TryRecreateProxy", "FAILED: Cannot determine endpoint address, returning original proxy");
+					return innerProxy;
+				}
+
+				// Use the correct IModelService type from Autodesk assemblies
+				if (iModelServiceType == null)
+				{
+					LogBindingError("TryRecreateProxy", "IModelService type is null, cannot recreate proxy");
+					return innerProxy;
+				}
+				LogBindingError("TryRecreateProxy", $"Using contract type: {iModelServiceType.FullName} from {iModelServiceType.Assembly.GetName().Name}");
+
+				// Create new binding with large message support (pass URI to determine TransferMode)
+				var newBinding = CreateLargeMessageBinding(endpointAddress.Uri.Scheme, endpointAddress.Uri);
+				if (newBinding == null)
+				{
+					LogBindingError("TryRecreateProxy", $"Cannot create binding for scheme: {endpointAddress.Uri.Scheme}");
+					return innerProxy;
+				}
+				var netTcpBinding = newBinding as NetTcpBinding;
+				LogBindingError("TryRecreateProxy", $"Created {newBinding.GetType().Name} with MaxReceivedMessageSize={netTcpBinding?.MaxReceivedMessageSize}, TransferMode={netTcpBinding?.TransferMode}");
+
+				// DON'T close the old channel yet - only close after new one works!
+
+				// Create new channel factory and channel using reflection (with Autodesk's IModelService type)
+				var channelFactoryType = typeof(ChannelFactory<>).MakeGenericType(iModelServiceType);
+				object factory;
+				try
+				{
+					factory = Activator.CreateInstance(channelFactoryType, newBinding, endpointAddress);
+					LogBindingError("TryRecreateProxy", $"Created ChannelFactory<{iModelServiceType.Name}>");
+				}
+				catch (Exception factoryEx)
+				{
+					var inner = factoryEx.InnerException?.Message ?? factoryEx.Message;
+					LogBindingError("TryRecreateProxy", $"Failed to create ChannelFactory: {inner}");
+					return innerProxy; // Return original (still open)
+				}
+				
+				// DON'T call ConfigureBindingLimits here - the binding was already created with correct settings
+				// Calling it would overwrite MaxReceivedMessageSize with 5GB (long) which breaks Buffered mode
+
+				// Create channel
+				object newProxy;
+				var createChannelMethod = channelFactoryType.GetMethod("CreateChannel", Type.EmptyTypes);
+				try
+				{
+					newProxy = createChannelMethod?.Invoke(factory, null);
+				}
+				catch (Exception createEx)
+				{
+					var inner = createEx.InnerException?.Message ?? createEx.Message;
+					var innerInner = createEx.InnerException?.InnerException?.Message;
+					LogBindingError("TryRecreateProxy", $"CreateChannel failed: {inner}" + (innerInner != null ? $" -> {innerInner}" : ""));
+					return innerProxy; // Return original (still open)
+				}
+				
+				if (newProxy != null)
+				{
+					// Open the channel before use
+					if (newProxy is ICommunicationObject newChannel)
+					{
+						try
+						{
+							newChannel.Open();
+							LogBindingError("TryRecreateProxy", $"New channel opened successfully, State={newChannel.State}");
+						}
+						catch (Exception openEx)
+						{
+							var inner = openEx.InnerException?.Message ?? openEx.Message;
+							LogBindingError("TryRecreateProxy", $"Failed to open new channel: {inner}");
+							return innerProxy; // Return original (still open)
+						}
+					}
+					
+					// NOW close the old channel since new one works
+					try 
+					{ 
+						commObj.Close(TimeSpan.FromSeconds(5)); 
+						LogBindingError("TryRecreateProxy", "Old channel closed successfully");
+					} 
+					catch
+					{ 
+						try { commObj.Abort(); } catch { } 
+					}
+					
+					LogBindingError("TryRecreateProxy", $"SUCCESS: Created and opened new channel with large message binding for {iModelServiceType.Name}");
+					return newProxy;
+				}
+				else
+				{
+					LogBindingError("TryRecreateProxy", "CreateChannel returned null");
+				}
+			}
+			catch (Exception ex)
+			{
+				var inner = ex.InnerException?.Message ?? "";
+				var innerInner = ex.InnerException?.InnerException?.Message ?? "";
+				LogBindingError("TryRecreateProxy", $"Failed to recreate proxy: {ex.GetType().Name}: {ex.Message}\nInner: {inner}\nInnerInner: {innerInner}\n{ex.StackTrace}");
+			}
+			return innerProxy;
+		}
+
+		private static EndpointAddress TryGetEndpointAddress(object proxy)
+		{
+			if (proxy == null) return null;
+			try
+			{
+				var proxyType = proxy.GetType();
+				LogBindingError("TryGetEndpointAddress", $"Trying to get endpoint from {proxyType.FullName}");
+				
+				// Try IClientChannel.RemoteAddress first (most reliable for WCF proxies)
+				if (proxy is IClientChannel clientChannel)
+				{
+					LogBindingError("TryGetEndpointAddress", $"Proxy is IClientChannel, RemoteAddress={clientChannel.RemoteAddress?.Uri}");
+					if (clientChannel.RemoteAddress != null) return clientChannel.RemoteAddress;
+				}
+				
+				// Try Endpoint.Address
+				var endpointProp = proxyType.GetProperty("Endpoint", BindingFlags.Public | BindingFlags.Instance);
+				if (endpointProp != null)
+				{
+					var endpoint = endpointProp.GetValue(proxy) as ServiceEndpoint;
+					LogBindingError("TryGetEndpointAddress", $"Endpoint property found, Address={endpoint?.Address?.Uri}");
+					if (endpoint?.Address != null) return endpoint.Address;
+				}
+
+				// Try RemoteAddress property directly
+				var remoteAddrProp = proxyType.GetProperty("RemoteAddress", BindingFlags.Public | BindingFlags.Instance);
+				if (remoteAddrProp != null)
+				{
+					var addr = remoteAddrProp.GetValue(proxy) as EndpointAddress;
+					LogBindingError("TryGetEndpointAddress", $"RemoteAddress property found, Uri={addr?.Uri}");
+					if (addr != null) return addr;
+				}
+
+				// Try ChannelFactory.Endpoint.Address
+				var cfProp = proxyType.GetProperty("ChannelFactory", BindingFlags.Public | BindingFlags.Instance);
+				if (cfProp != null)
+				{
+					var cf = cfProp.GetValue(proxy);
+					if (cf != null)
+					{
+						var cfEndpointProp = cf.GetType().GetProperty("Endpoint", BindingFlags.Public | BindingFlags.Instance);
+						var cfEndpoint = cfEndpointProp?.GetValue(cf) as ServiceEndpoint;
+						LogBindingError("TryGetEndpointAddress", $"ChannelFactory.Endpoint.Address={cfEndpoint?.Address?.Uri}");
+						if (cfEndpoint?.Address != null) return cfEndpoint.Address;
+					}
+				}
+				
+				// Try to find any property that returns EndpointAddress
+				foreach (var prop in proxyType.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+				{
+					if (typeof(EndpointAddress).IsAssignableFrom(prop.PropertyType))
+					{
+						try
+						{
+							var addr = prop.GetValue(proxy) as EndpointAddress;
+							if (addr != null)
+							{
+								LogBindingError("TryGetEndpointAddress", $"Found EndpointAddress in property {prop.Name}: {addr.Uri}");
+								return addr;
+							}
+						}
+						catch { }
+					}
+				}
+				
+				// Try to find Via property (sometimes used in WCF)
+				var viaProp = proxyType.GetProperty("Via", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				if (viaProp != null)
+				{
+					var via = viaProp.GetValue(proxy) as Uri;
+					if (via != null)
+					{
+						LogBindingError("TryGetEndpointAddress", $"Found Via property: {via}");
+						return new EndpointAddress(via);
+					}
+				}
+				
+				LogBindingError("TryGetEndpointAddress", "No endpoint address found via standard properties");
+				
+				// Last resort: dump all properties and fields to find URI
+				DumpProxyStructure(proxy, proxyType);
+				
+				// Try to find URI in any field
+				foreach (var field in proxyType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+				{
+					try
+					{
+						var val = field.GetValue(proxy);
+						if (val is Uri uri)
+						{
+							LogBindingError("TryGetEndpointAddress", $"Found Uri in field {field.Name}: {uri}");
+							return new EndpointAddress(uri);
+						}
+						if (val is EndpointAddress ea)
+						{
+							LogBindingError("TryGetEndpointAddress", $"Found EndpointAddress in field {field.Name}: {ea.Uri}");
+							return ea;
+						}
+						// Check nested object for RemoteAddress
+						if (val != null && val is ICommunicationObject)
+						{
+							var nestedAddr = TryGetEndpointAddressFromObject(val);
+							if (nestedAddr != null) return nestedAddr;
+						}
+					}
+					catch { }
+				}
+			}
+			catch (Exception ex)
+			{
+				LogBindingError("TryGetEndpointAddress", $"Exception: {ex.Message}");
+			}
+			return null;
+		}
+
+		private static EndpointAddress TryGetEndpointAddressFromObject(object obj)
+		{
+			if (obj == null) return null;
+			try
+			{
+				var t = obj.GetType();
+				// Try RemoteAddress
+				var raProp = t.GetProperty("RemoteAddress", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				if (raProp != null)
+				{
+					var ra = raProp.GetValue(obj) as EndpointAddress;
+					if (ra != null)
+					{
+						LogBindingError("TryGetEndpointAddressFromObject", $"Found RemoteAddress: {ra.Uri}");
+						return ra;
+					}
+				}
+				// Try Via
+				var viaProp = t.GetProperty("Via", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				if (viaProp != null)
+				{
+					var via = viaProp.GetValue(obj) as Uri;
+					if (via != null)
+					{
+						LogBindingError("TryGetEndpointAddressFromObject", $"Found Via: {via}");
+						return new EndpointAddress(via);
+					}
+				}
+			}
+			catch { }
+			return null;
+		}
+
+		private static void DumpProxyStructure(object proxy, Type proxyType)
+		{
+			try
+			{
+				var sb = new System.Text.StringBuilder();
+				sb.AppendLine($"=== Proxy Structure Dump for {proxyType.FullName} ===");
+				
+				sb.AppendLine("Interfaces:");
+				foreach (var iface in proxyType.GetInterfaces())
+				{
+					sb.AppendLine($"  - {iface.FullName}");
+				}
+				
+				sb.AppendLine("Properties:");
+				foreach (var prop in proxyType.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+				{
+					try
+					{
+						var val = prop.GetValue(proxy);
+						sb.AppendLine($"  - {prop.Name}: {prop.PropertyType.Name} = {val}");
+					}
+					catch (Exception ex)
+					{
+						sb.AppendLine($"  - {prop.Name}: {prop.PropertyType.Name} = [ERROR: {ex.Message}]");
+					}
+				}
+				
+				sb.AppendLine("Fields:");
+				foreach (var field in proxyType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+				{
+					try
+					{
+						var val = field.GetValue(proxy);
+						sb.AppendLine($"  - {field.Name}: {field.FieldType.Name} = {val}");
+					}
+					catch (Exception ex)
+					{
+						sb.AppendLine($"  - {field.Name}: {field.FieldType.Name} = [ERROR: {ex.Message}]");
+					}
+				}
+				
+				LogBindingError("DumpProxyStructure", sb.ToString());
+			}
+			catch { }
+		}
+
+		private static Binding CreateLargeMessageBinding(string scheme, Uri endpointUri = null)
+		{
+			if (string.Equals(scheme, "net.tcp", StringComparison.OrdinalIgnoreCase))
+			{
+				// Determine TransferMode from endpoint path
+				// /tcpbuffer -> Buffered, /tcpstreamed -> Streamed
+				var transferMode = TransferMode.Buffered; // Default to buffered
+				if (endpointUri != null)
+				{
+					var path = endpointUri.AbsolutePath.ToLowerInvariant();
+					if (path.Contains("stream"))
+					{
+						transferMode = TransferMode.Streamed;
+					}
+					else if (path.Contains("buffer"))
+					{
+						transferMode = TransferMode.Buffered;
+					}
+					LogBindingError("CreateLargeMessageBinding", $"Endpoint path '{path}' -> TransferMode.{transferMode}");
+				}
+				
+				// For Buffered mode: MaxReceivedMessageSize must fit in int (max ~2GB)
+				// For Streamed mode: MaxReceivedMessageSize can be long (up to 5GB+)
+				long maxMsgSize;
+				int maxBufSize;
+				if (transferMode == TransferMode.Buffered)
+				{
+					// Buffered: both must be int, and MaxBufferSize == MaxReceivedMessageSize
+					maxMsgSize = int.MaxValue;
+					maxBufSize = int.MaxValue;
+				}
+				else
+				{
+					// Streamed: MaxReceivedMessageSize can be large, MaxBufferSize is just for headers
+					maxMsgSize = MaxMessageSizeBytes; // 5GB
+					maxBufSize = 65536; // Small buffer for headers only
+				}
+				
+				var binding = new NetTcpBinding(SecurityMode.None)
+				{
+					MaxReceivedMessageSize = maxMsgSize,
+					MaxBufferSize = maxBufSize,
+					MaxBufferPoolSize = maxBufSize,
+					TransferMode = transferMode,
+					OpenTimeout = TimeSpan.FromMinutes(10),
+					CloseTimeout = TimeSpan.FromMinutes(10),
+					SendTimeout = TimeSpan.FromMinutes(30),
+					ReceiveTimeout = TimeSpan.FromMinutes(30)
+				};
+				ApplyReaderQuotas(binding.ReaderQuotas);
+				LogBindingError("CreateLargeMessageBinding", $"Created binding: TransferMode={transferMode}, MaxReceivedMessageSize={maxMsgSize}, MaxBufferSize={maxBufSize}");
+				return binding;
+			}
+			return null;
+		}
+
+		private static void LogBindingError(string method, string message)
+		{
+			try
+			{
+				var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_Binding_Diagnostics.txt");
+				System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{method}] {message}\n");
+			}
+			catch { }
+		}
+
+		private static Binding TryGetBindingFromClientProxy(object clientProxy)
+		{
+			if (clientProxy == null) return null;
+			var proxyType = clientProxy.GetType();
+
+			// Try Endpoint property (ClientBase<T>)
+			var endpointProp = proxyType.GetProperty("Endpoint", BindingFlags.Public | BindingFlags.Instance);
+			if (endpointProp != null)
+			{
+				var endpoint = endpointProp.GetValue(clientProxy) as ServiceEndpoint;
+				if (endpoint?.Binding != null) return endpoint.Binding;
+			}
+
+			// Try ChannelFactory property
+			var channelFactoryProp = proxyType.GetProperty("ChannelFactory", BindingFlags.Public | BindingFlags.Instance);
+			if (channelFactoryProp != null)
+			{
+				var channelFactory = channelFactoryProp.GetValue(clientProxy);
+				var cfBinding = TryGetBindingFromChannelFactory(channelFactory);
+				if (cfBinding != null) return cfBinding;
+			}
+
+			// Try Binding property directly
+			var bindingProp = proxyType.GetProperty("Binding", BindingFlags.Public | BindingFlags.Instance);
+			if (bindingProp != null)
+			{
+				return bindingProp.GetValue(clientProxy) as Binding;
+			}
+
+			// Try IClientChannel explicit implementations (dynamic WCF proxies)
+			if (clientProxy is IClientChannel clientChannel)
+			{
+				var channelFactory = TryGetPropertyValue(clientChannel, "ChannelFactory");
+				var cfBinding = TryGetBindingFromChannelFactory(channelFactory);
+				if (cfBinding != null) return cfBinding;
+			}
+
+			return null;
+		}
+
+		private static Binding TryGetBindingFromChannelFactory(object channelFactory)
+		{
+			if (channelFactory == null) return null;
+			var cfEndpointProp = channelFactory.GetType().GetProperty("Endpoint", BindingFlags.Public | BindingFlags.Instance);
+			var cfEndpoint = cfEndpointProp?.GetValue(channelFactory) as ServiceEndpoint;
+			return cfEndpoint?.Binding;
+		}
+
+		private static object TryGetPropertyValue(object target, string propertyName)
+		{
+			if (target == null || string.IsNullOrWhiteSpace(propertyName)) return null;
+			try
+			{
+				var t = target.GetType();
+				var prop = t.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				if (prop != null) return prop.GetValue(target);
+
+				// Try explicit interface implementation names
+				var explicitProp = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+					.FirstOrDefault(p => p.Name.EndsWith("." + propertyName, StringComparison.Ordinal));
+				return explicitProp?.GetValue(target);
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+		private static void ConfigureBindingLimits(Binding binding)
+		{
+			if (binding == null) return;
+
+			switch (binding)
+			{
+				case NetTcpBinding netTcp:
+					netTcp.MaxReceivedMessageSize = MaxMessageSizeBytes;
+					netTcp.MaxBufferSize = MaxBufferSizeBytes;
+					netTcp.MaxBufferPoolSize = Math.Max(netTcp.MaxBufferPoolSize, MaxBufferSizeBytes);
+					ApplyReaderQuotas(netTcp.ReaderQuotas);
+					return;
+
+				case CustomBinding custom:
+					foreach (var element in custom.Elements)
+					{
+						if (element is TransportBindingElement transport)
+						{
+							transport.MaxReceivedMessageSize = MaxMessageSizeBytes;
+						}
+						if (element is TextMessageEncodingBindingElement textEncoding)
+						{
+							ApplyReaderQuotas(textEncoding.ReaderQuotas);
+						}
+						if (element is BinaryMessageEncodingBindingElement binaryEncoding)
+						{
+							ApplyReaderQuotas(binaryEncoding.ReaderQuotas);
+						}
+						if (element is MtomMessageEncodingBindingElement mtomEncoding)
+						{
+							ApplyReaderQuotas(mtomEncoding.ReaderQuotas);
+						}
+					}
+					return;
+			}
+		}
+
+		private static void ApplyReaderQuotas(XmlDictionaryReaderQuotas quotas)
+		{
+			if (quotas == null) return;
+			quotas.MaxDepth = Math.Max(quotas.MaxDepth, 64);
+			quotas.MaxStringContentLength = int.MaxValue;
+			quotas.MaxArrayLength = int.MaxValue;
+			quotas.MaxBytesPerRead = int.MaxValue;
+			quotas.MaxNameTableCharCount = int.MaxValue;
 		}
 	}
 }
