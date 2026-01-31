@@ -1,12 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net48;net8.0</TargetFrameworks>
+    <TargetFrameworks>net48;net6.0;net8.0</TargetFrameworks>
     <RootNamespace>RevitServerNet</RootNamespace>
     <AssemblyName>RevitServerNet</AssemblyName>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>RevitServerNet</PackageId>
-    <Version>1.1.2</Version>
+    <Version>1.2.0</Version>
     <Authors>RevitServerNet Contributors</Authors>
     <Company>RevitServerNet Contributors</Company>
     <Product>RevitServerNet</Product>
@@ -26,6 +26,11 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="System.Security.Permissions" Version="9.0.9" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)'!='net48'">
+    <PackageReference Include="System.ServiceModel.Primitives" Version="4.9.0" />
+    <PackageReference Include="System.ServiceModel.NetTcp" Version="4.9.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -51,13 +56,6 @@
 
   <ItemGroup Condition="'$(TargetFramework)'=='net48'">
     <Reference Include="System.ServiceModel" />
-  </ItemGroup>
-
-  <!-- Exclude RS Enterprise implementation files from net8.0 build -->
-  <ItemGroup Condition="'$(TargetFramework)'=='net8.0'">
-    <Compile Remove="Enterprise\**\*.cs" />
-    <Compile Remove="Extensions\ExportExtensions.cs" />
-    <Compile Remove="ModelExport.cs" />
   </ItemGroup>
 
 </Project>

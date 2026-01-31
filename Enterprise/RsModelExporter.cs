@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.ServiceModel;
 using System.Threading.Tasks;
 
 namespace RevitServerNet.Enterprise
@@ -108,112 +107,6 @@ namespace RevitServerNet.Enterprise
 			if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 			if (File.Exists(options.DestinationFile) && !options.Overwrite)
 				throw new IOException("Destination file already exists. Set Overwrite=true to replace.");
-		}
-
-		private static (object proxyProviderInstance, Type iModelServiceType) CreateProxyProviderAndModelServiceType(
-			RsAssemblies assemblies,
-			string serverHost,
-			string revitVersion,
-			out MethodInfo getBufferedProxyMethod,
-			out MethodInfo getStreamedProxyMethod)
-		{
-			var proxyProviderType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.Proxy.ProxyProvider");
-
-			// Try multiple known creation paths for Provider across RS versions
-			object provider = null;
-
-			// Helper to validate a candidate provider instance
-			bool IsValidProvider(object candidate)
-			{
-				if (candidate == null) return false;
-				var t = candidate.GetType();
-				var hasStream = t.GetMethods(BindingFlags.Public | BindingFlags.Instance).Any(m => m.Name == "GetStreamedProxy" && m.IsGenericMethodDefinition);
-				var hasBuffered = t.GetMethods(BindingFlags.Public | BindingFlags.Instance).Any(m => m.Name == "GetBufferedProxy" && m.IsGenericMethodDefinition);
-				var hasRouted = t.GetMethods(BindingFlags.Public | BindingFlags.Instance).Any(m => m.Name == "GetRoutedProxy" && m.IsGenericMethodDefinition);
-				return hasStream || hasBuffered || hasRouted;
-			}
-
-			// 1) Known static factories
-			var factories = new[] { "CreateProxyInstance", "CreateInstance", "Create", "GetInstance" };
-			var failures = new List<Exception>();
-			foreach (var name in factories)
-			{
-				var m1 = proxyProviderType.GetMethod(name, BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-				if (m1 != null)
-				{
-					try { provider = m1.Invoke(null, new object[] { revitVersion }); if (IsValidProvider(provider)) break; }
-					catch (Exception ex) { failures.Add(new InvalidOperationException($"{proxyProviderType.FullName}.{name}(string) failed", ex)); provider = null; }
-				}
-				var m0 = proxyProviderType.GetMethod(name, BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
-				if (provider == null && m0 != null)
-				{
-					try { provider = m0.Invoke(null, null); if (IsValidProvider(provider)) break; }
-					catch (Exception ex) { failures.Add(new InvalidOperationException($"{proxyProviderType.FullName}.{name}() failed", ex)); provider = null; }
-				}
-			}
-
-			// 2) Static properties
-			if (provider == null)
-			{
-				foreach (var propName in new[] { "Instance", "Current", "Default" })
-				{
-					var p = proxyProviderType.GetProperty(propName, BindingFlags.Public | BindingFlags.Static);
-					if (p != null)
-					{
-						try { provider = p.GetValue(null); if (IsValidProvider(provider)) break; } catch { provider = null; }
-					}
-				}
-			}
-
-			// 3) Constructors
-			if (provider == null)
-			{
-				var ctor0 = proxyProviderType.GetConstructor(Type.EmptyTypes);
-				if (ctor0 != null)
-				{
-					try { provider = ctor0.Invoke(null); if (!IsValidProvider(provider)) provider = null; }
-					catch (Exception ex) { failures.Add(new InvalidOperationException($"{proxyProviderType.FullName}.ctor() failed", ex)); provider = null; }
-				}
-				var ctor1 = proxyProviderType.GetConstructor(new[] { typeof(string) });
-				if (provider == null && ctor1 != null)
-				{
-					try { provider = ctor1.Invoke(new object[] { revitVersion }); if (!IsValidProvider(provider)) provider = null; }
-					catch (Exception ex) { failures.Add(new InvalidOperationException($"{proxyProviderType.FullName}.ctor(string) failed", ex)); provider = null; }
-				}
-			}
-
-			if (provider == null)
-			{
-				var hint = failures.Count > 0 ? failures[failures.Count - 1].GetBaseException().Message : "unknown error";
-				throw new InvalidOperationException($"Failed to construct ProxyProvider for RS version '{revitVersion}'. Assemblies base='{assemblies.BaseDirectory}'. Last error: {hint}");
-			}
-
-			var iModelServiceType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.ServiceContract.Model.IModelService");
-			getBufferedProxyMethod = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetBufferedProxy" }, iModelServiceType);
-			getStreamedProxyMethod = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetStreamedProxy", "GetRoutedProxy" }, iModelServiceType);
-			return (provider, iModelServiceType);
-		}
-
-		private static MethodInfo FindGenericProxyMethod(Type providerType, string methodName, Type serviceType)
-		{
-			var methods = providerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-				.Where(m => m.Name == methodName && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
-				.ToList();
-			if (methods.Count == 0) throw new MissingMethodException(providerType.FullName, methodName);
-			return methods[0].MakeGenericMethod(serviceType);
-		}
-
-		private static MethodInfo FindGenericProxyMethodAny(Type providerType, string[] candidateNames, Type serviceType)
-		{
-			foreach (var name in candidateNames)
-			{
-				var methods = providerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-					.Where(m => m.Name == name && m.IsGenericMethodDefinition && m.GetParameters().Length == 1)
-					.ToList();
-				if (methods.Count > 0)
-					return methods[0].MakeGenericMethod(serviceType);
-			}
-			throw new MissingMethodException(providerType.FullName, string.Join("|", candidateNames));
 		}
 
 		private static string CreateTempModelDataFolder()
@@ -569,7 +462,7 @@ namespace RevitServerNet.Enterprise
 			{
 				lockData.Invoke(proxy, args);
 			}
-			catch (TargetInvocationException tie) when (tie.InnerException is FaultException faultEx)
+			catch (TargetInvocationException tie) when (TryGetFaultException(tie.InnerException, out var faultEx))
 			{
 				// ДЕТАЛЬНОЕ логирование ServiceFault
 				var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_LockData_Fault.txt");
@@ -618,6 +511,29 @@ namespace RevitServerNet.Enterprise
 			return args[4]; // creationDate (EpisodeGuid)
 		}
 
+		private static bool TryGetFaultException(Exception ex, out Exception faultException)
+		{
+			faultException = null;
+			if (ex == null) return false;
+			var type = ex.GetType();
+			if (type.FullName == "System.ServiceModel.FaultException")
+			{
+				faultException = ex;
+				return true;
+			}
+			if (type.IsGenericType && type.GetGenericTypeDefinition().FullName == "System.ServiceModel.FaultException`1")
+			{
+				faultException = ex;
+				return true;
+			}
+			if (type.Name.StartsWith("FaultException", StringComparison.Ordinal))
+			{
+				faultException = ex;
+				return true;
+			}
+			return false;
+		}
+
 		private static IEnumerable<string> GetModelDataFileList(RsAssemblies assemblies, String revitVersion, String serverHost, Object serviceModelSessionToken)
 		{
 			var clientProxy = GetGenericClientProxy(assemblies, revitVersion, serverHost, useStreamed: false);
@@ -644,7 +560,22 @@ namespace RevitServerNet.Enterprise
 			string tempDir,
 			IProgress<long> progress)
 		{
-			var clientProxy = GetGenericClientProxy(assemblies, revitVersion, serverHost, useStreamed: true);
+			object clientProxy;
+			try
+			{
+				clientProxy = GetGenericClientProxy(assemblies, revitVersion, serverHost, useStreamed: true);
+			}
+			catch (Exception ex)
+			{
+				// Fallback to buffered proxy when streaming binding is unavailable (e.g. net.tcp stream issues)
+				try
+				{
+					var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_StreamProxy_Fallback.txt");
+					System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Streamed proxy failed: {ex.GetBaseException().Message}\n");
+				}
+				catch { }
+				clientProxy = GetGenericClientProxy(assemblies, revitVersion, serverHost, useStreamed: false);
+			}
 			var proxy = GetProxyFromClientProxy(clientProxy);
 			var iModelServiceType = assemblies.GetType("Autodesk.RevitServer.Enterprise.Common.ClientServer.ServiceContract.Model.IModelService");
 		// Resolve FileDownloadRequestMessage from available assemblies
@@ -874,12 +805,6 @@ namespace RevitServerNet.Enterprise
 			return prop.GetValue(clientProxy);
 		}
 
-		private static string GetHostFromModelPipePath(string modelPipePath)
-		{
-			// When using ProxyProvider.Get*Proxy(host), pass server host. Caller will supply host when available.
-			// Here we return null to use external parameter through delegates above, so this method is kept for completeness.
-			return null;
-		}
 
 		private static string ConvertPipePathToRelativeWindowsPath(string pipePath)
 		{
@@ -903,25 +828,12 @@ namespace RevitServerNet.Enterprise
 			return result;
 		}
 
-		private static string ConvertPipePathToRelativePipePath(string pipePath)
-		{
-			if (string.IsNullOrWhiteSpace(pipePath)) return pipePath;
-			var p = pipePath.Trim();
-			if (p.StartsWith("|")) p = p.Substring(1);
-			return p; // keep '|' delimiters
-		}
 
 		private static void TryCleanupTemp(string dir)
 		{
 			try { if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
 		}
 
-		private static Type FindTypeOrThrow(RsAssemblies assemblies, string fullName)
-		{
-			var t = assemblies.GetType(fullName);
-			if (t == null) throw new TypeLoadException($"Type not found: {fullName}");
-			return t;
-		}
 
 		private static Type FindTypeAnyOrThrow(RsAssemblies assemblies, string autodeskFullName)
 		{
@@ -998,146 +910,11 @@ namespace RevitServerNet.Enterprise
 			catch { }
 		}
 
-		// Altec-like proxy usage helpers (moved inside class)
-		private static object IdentifyModelExact(RsAssemblies assemblies, Type iModelServiceType, string revitVersion, string serverHost, object serviceSessionToken, string modelPipePath)
-		{
-			var proxyProviderType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.Proxy.ProxyProvider");
-			var create = proxyProviderType.GetMethod("CreateProxyInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null)
-						 ?? proxyProviderType.GetMethod("CreateInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-			if (create == null) throw new MissingMethodException(proxyProviderType.FullName, "CreateProxyInstance/CreateInstance");
-			var provider = create.Invoke(null, new object[] { revitVersion });
-			var getStreamed = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetStreamedProxy" }, iModelServiceType);
-			var clientProxy = getStreamed.Invoke(provider, new object[] { serverHost });
-			var proxy = GetProxyFromClientProxy(clientProxy);
-			var identifyMethod = iModelServiceType.GetMethod("IdentifyModel", BindingFlags.Public | BindingFlags.Instance);
-			if (identifyMethod == null) throw new MissingMethodException(iModelServiceType.FullName, "IdentifyModel");
-			var windowsPath = ConvertPipePathToRelativeWindowsPath(modelPipePath);
-			return identifyMethod.Invoke(proxy, new object[] { serviceSessionToken, windowsPath, true });
-		}
-
-		private static object LockDataExact(RsAssemblies assemblies, Type iModelServiceType, string revitVersion, string serverHost, object serviceModelSessionToken)
-		{
-			var proxyProviderType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.Proxy.ProxyProvider");
-			var create = proxyProviderType.GetMethod("CreateProxyInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null)
-						 ?? proxyProviderType.GetMethod("CreateInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-			var provider = create.Invoke(null, new object[] { revitVersion });
-			var getStreamed = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetStreamedProxy" }, iModelServiceType);
-			var clientProxy = getStreamed.Invoke(provider, new object[] { serverHost });
-			var proxy = GetProxyFromClientProxy(clientProxy);
-
-			var lockData = iModelServiceType.GetMethod("LockData", BindingFlags.Public | BindingFlags.Instance);
-			if (lockData == null) throw new MissingMethodException(iModelServiceType.FullName, "LockData");
-
-			var modelVersionType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Model.ModelVersion");
-			var versionNumberType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Model.VersionNumber");
-			var historyCheckInfoType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Model.ModelHistoryCheckInfo");
-			var episodeGuidType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Model.EpisodeGuid");
-
-			var episodeInvalid = episodeGuidType.GetField("Invalid", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
-			var historyCtor = historyCheckInfoType.GetConstructor(new[] { episodeGuidType });
-			var history = historyCtor.Invoke(new[] { episodeInvalid });
-			var versionNumberCtor = versionNumberType.GetConstructor(new[] { typeof(int) });
-			var versionNumber = versionNumberCtor.Invoke(new object[] { 0 });
-			var modelVersionCtor = modelVersionType.GetConstructor(new[] { versionNumberType, historyCheckInfoType });
-			var modelVersion = modelVersionCtor.Invoke(new[] { versionNumber, history });
-
-			var args = new object[] { serviceModelSessionToken, (uint)129, true, modelVersion, null };
-			lockData.Invoke(proxy, args);
-			return args[4];
-		}
-
-		private static IEnumerable<string> GetModelDataFileListExact(RsAssemblies assemblies, Type iModelServiceType, string revitVersion, string serverHost, object serviceModelSessionToken)
-		{
-			var proxyProviderType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.Proxy.ProxyProvider");
-			var create = proxyProviderType.GetMethod("CreateProxyInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null)
-						 ?? proxyProviderType.GetMethod("CreateInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-			var provider = create.Invoke(null, new object[] { revitVersion });
-			var getStreamed = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetStreamedProxy" }, iModelServiceType);
-			var clientProxy = getStreamed.Invoke(provider, new object[] { serverHost });
-			var proxy = GetProxyFromClientProxy(clientProxy);
-
-			var method = iModelServiceType.GetMethod("GetListOfModelDataFilesWithoutLocking", BindingFlags.Public | BindingFlags.Instance);
-			if (method == null) throw new MissingMethodException(iModelServiceType.FullName, "GetListOfModelDataFilesWithoutLocking");
-			var args = new object[] { serviceModelSessionToken, null };
-			method.Invoke(proxy, args);
-			var list = args[1] as IEnumerable;
-			if (list == null) return Enumerable.Empty<string>();
-			var result = new List<string>();
-			foreach (var x in list) if (x != null) result.Add(x.ToString());
-			return result;
-		}
-
-		private static async Task DownloadAllFilesAsyncExact(
-			RsAssemblies assemblies,
-			Type iModelServiceType,
-			string revitVersion,
-			string serverHost,
-			object serviceModelSessionToken,
-			object creationDate,
-			IEnumerable<string> fileList,
-			string tempDir,
-			IProgress<long> progress)
-		{
-			var proxyProviderType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.Proxy.ProxyProvider");
-			var create = proxyProviderType.GetMethod("CreateProxyInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null)
-						 ?? proxyProviderType.GetMethod("CreateInstance", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-			var provider = create.Invoke(null, new object[] { revitVersion });
-			var getStreamed = FindGenericProxyMethodAny(provider.GetType(), new[] { "GetStreamedProxy" }, iModelServiceType);
-			var clientProxy = getStreamed.Invoke(provider, new object[] { serverHost });
-			var proxy = GetProxyFromClientProxy(clientProxy);
-
-			var requestType = FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Message.FileDownloadRequestMessage");
-			// We'll extract the stream reflectively; no strict type dependency
-			var downloadMethod = iModelServiceType.GetMethod("DownloadFile", BindingFlags.Public | BindingFlags.Instance, null, new[] { requestType }, null);
-			if (downloadMethod == null) throw new MissingMethodException(iModelServiceType.FullName, "DownloadFile");
-			var requestCtor = requestType.GetConstructor(new[] { FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.SessionToken.ServiceModelSessionToken"), FindTypeAnyOrThrow(assemblies, "Autodesk.RevitServer.Enterprise.Common.ClientServer.DataContract.Model.EpisodeGuid"), typeof(string) });
-			if (requestCtor == null) throw new MissingMethodException(requestType.FullName, ".ctor(ServiceModelSessionToken,EpisodeGuid,string)");
-
-			foreach (var file in fileList)
-			{
-				var tokenForFile = CreateServiceModelSessionTokenFromExisting(assemblies, serviceModelSessionToken);
-				var sourceFileName = GetSourceFileName(assemblies, serviceModelSessionToken, file);
-				var request = requestCtor.Invoke(new[] { tokenForFile, creationDate, sourceFileName });
-				var msg = downloadMethod.Invoke(proxy, new[] { request });
-				if (msg == null) throw new InvalidOperationException("DownloadFile returned null message");
-				using (var stream = ExtractStreamFromMessage(msg))
-				{
-					if (stream == null)
-					{
-						try
-						{
-							var dbg = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_DownloadFile_MessageType.txt");
-							var t = msg.GetType();
-							using (var sw = new System.IO.StreamWriter(dbg, true, System.Text.Encoding.UTF8))
-							{
-								sw.WriteLine($"\n==== {DateTime.Now:yyyy-MM-dd HH:mm:ss} Message type dump ====");
-								sw.WriteLine($"Type: {t.FullName}");
-								try { sw.WriteLine($"Assembly: {t.Assembly.Location}"); } catch { }
-								sw.WriteLine("Properties:");
-								foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-								{
-									sw.WriteLine($"  - {p.Name} : {p.PropertyType.FullName}");
-								}
-								sw.WriteLine("Fields:");
-								foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
-								{
-									sw.WriteLine($"  - {f.Name} : {f.FieldType.FullName}");
-								}
-							}
-						}
-						catch { }
-						throw new InvalidOperationException("DownloadFile returned null stream");
-					}
-					var target = Path.Combine(tempDir, Path.GetFileName(file));
-					Directory.CreateDirectory(Path.GetDirectoryName(target));
-					await CopyToFileAsync(stream, target, progress);
-				}
-			}
-		}
-
 		private static Stream ExtractStreamFromMessage(object message)
 		{
 			if (message == null) return null;
+			if (message is byte[] directBytes)
+				return new MemoryStream(directBytes, writable: false);
 			var type = message.GetType();
 			// Try property named "Stream"
 			var prop = type.GetProperty("Stream", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -1153,6 +930,25 @@ namespace RevitServerNet.Enterprise
 			// Search fields
 			var field = type.GetField("_stream", BindingFlags.NonPublic | BindingFlags.Instance) ?? type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).FirstOrDefault(f => typeof(Stream).IsAssignableFrom(f.FieldType));
 			if (field != null) return field.GetValue(message) as Stream;
+			// Try byte[] payloads (buffered responses)
+			var byteProp = type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+				.FirstOrDefault(p => p.PropertyType == typeof(byte[]) &&
+									 (p.Name.Equals("Data", StringComparison.OrdinalIgnoreCase) ||
+									  p.Name.Equals("Bytes", StringComparison.OrdinalIgnoreCase) ||
+									  p.Name.Equals("Buffer", StringComparison.OrdinalIgnoreCase) ||
+									  p.Name.Equals("Content", StringComparison.OrdinalIgnoreCase)));
+			if (byteProp != null)
+			{
+				var bytes = byteProp.GetValue(message) as byte[];
+				if (bytes != null) return new MemoryStream(bytes, writable: false);
+			}
+			var byteField = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+				.FirstOrDefault(f => f.FieldType == typeof(byte[]));
+			if (byteField != null)
+			{
+				var bytes = byteField.GetValue(message) as byte[];
+				if (bytes != null) return new MemoryStream(bytes, writable: false);
+			}
 			try
 			{
 				var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RevitServerNet_DownloadFile_MessageType.txt");

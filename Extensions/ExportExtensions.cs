@@ -28,9 +28,7 @@ namespace RevitServerNet.Extensions
             System.Diagnostics.Debug.WriteLine($"[ExportModelAsync] Detected version: {version}");
             System.Diagnostics.Debug.WriteLine($"[ExportModelAsync] Host: {host}");
 
-#if !NETFRAMEWORK
-            throw new PlatformNotSupportedException("ExportModelAsync is only available on .NET Framework (net48). Use RevitServerNetTest net48 runner or call REST.");
-#else
+//#if NETFRAMEWORK || NET6_0 || NET8_0
             // Call public exporter
             var options = new ModelExporterOptions
             {
@@ -42,7 +40,9 @@ namespace RevitServerNet.Extensions
                 Overwrite = overwrite,
             };
             return await ModelExporter.ExportAsync(options, bytesProgress);
-#endif
+//#else
+          //  throw new PlatformNotSupportedException("ExportModelAsync is only available on .NET Framework, .NET 6 or .NET 8. Use RevitServerNetTest net48/net6/net8 runner or call REST.");
+//#endif
         }
 
         private static string InferVersionFromBaseUrl(string baseUrl)

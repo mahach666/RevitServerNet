@@ -1,9 +1,9 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-#if NETFRAMEWORK
+//#if NETFRAMEWORK || NET6_0 || NET8_0
 using RevitServerNet.Enterprise;
-#endif
+//#endif
 
 namespace RevitServerNet
 {
@@ -63,9 +63,7 @@ namespace RevitServerNet
             if (string.IsNullOrWhiteSpace(options.DestinationFile)) throw new ArgumentException("DestinationFile is required", nameof(options.DestinationFile));
             if (string.IsNullOrWhiteSpace(options.RevitVersion)) throw new ArgumentException("RevitVersion is required", nameof(options.RevitVersion));
             
-#if !NETFRAMEWORK
-            throw new PlatformNotSupportedException("Direct RS library export is only available on .NET Framework (net48). Use REST APIs on net8.0.");
-#else
+//#if NETFRAMEWORK || NET6_0 || NET8_0
             // Map public options to internal exporter options and execute
             var internalOptions = new RsModelExporterOptions
             {
@@ -79,7 +77,9 @@ namespace RevitServerNet
 
             var exporter = new RsModelExporter();
             return await exporter.ExportAsync(internalOptions, bytesProgress);
-#endif
+//#else
+//            throw new PlatformNotSupportedException("Direct RS library export is only available on .NET Framework, .NET 6 or .NET 8. Use REST APIs on other targets.");
+//#endif
         }
     }
 }
