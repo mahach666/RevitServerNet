@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a new capability or an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you need to do
+      description: The task you cannot do today, and which Revit Server operation or endpoint it involves.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you tried

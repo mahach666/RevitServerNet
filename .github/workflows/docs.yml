@@ -1,0 +1,67 @@
+name: Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - 'docfx.json'
+      - '.config/dotnet-tools.json'
+      - '*.cs'
+      - 'Enterprise/**'
+      - 'Extensions/**'
+      - 'Tools/**'
+      - 'RevitServerNet.csproj'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'docfx.json'
+      - '.config/dotnet-tools.json'
+      - '*.cs'
+      - 'Enterprise/**'
+      - 'Extensions/**'
+      - 'Tools/**'
+      - 'RevitServerNet.csproj'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          # 8.0.x builds the net8.0 API metadata; docfx 2.81.0 itself runs on .NET 10.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet tool restore
+      - run: dotnet docfx docfx.json --warningsAsErrors
+      # manifest.json records the build machine paths and is not part of the site.
+      - run: rm _site/manifest.json
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

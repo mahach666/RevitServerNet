@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here, see SECURITY.md. Do not post real server names, credentials or customer models.
+  - type: input
+    id: version
+    attributes:
+      label: RevitServerNet version
+      placeholder: "1.4.0"
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Revit Server year and how it runs
+      placeholder: "2024, Docker (RevitServerStack)"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Target framework and OS
+      placeholder: "net8.0, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The call you made, what you expected and what you got (exception type and message, HTTP status).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      render: csharp

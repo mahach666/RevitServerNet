@@ -21,6 +21,7 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <!-- Test project lives in a subfolder: keep its sources out of the library -->
     <DefaultItemExcludes>$(DefaultItemExcludes);RevitServerNet.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
@@ -51,6 +52,7 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="icon.png" Pack="true" PackagePath="/" />
     <None Include="CHANGES.md" Pack="true" PackagePath="/" />
     <None Include="LICENSE.txt" Pack="true" PackagePath="/" />
   </ItemGroup>

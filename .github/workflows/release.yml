@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $version = dotnet msbuild RevitServerNet.csproj -getProperty:Version -nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:GITHUB_REF_NAME -cne "v$($version.Trim())") {
+            throw "The release tag must match the package version v$($version.Trim())."
+          }
+      # Before anything is published: a tag whose commit has no CHANGES.md section for the version fails here.
+      - name: Extract release notes
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $changes = Get-Content -LiteralPath CHANGES.md -Encoding utf8
+          $start = [array]::FindIndex($changes, [Predicate[string]] { param($line) $line.TrimEnd() -ceq "## $version" })
+          if ($start -lt 0) { throw "CHANGES.md has no section '## $version'" }
+          $notes = @()
+          for ($i = $start + 1; $i -lt $changes.Count -and -not $changes[$i].StartsWith('## '); $i++) { $notes += $changes[$i] }
+          if (-not (($notes -join '').Trim())) { throw "The CHANGES.md section for $version is empty" }
+          $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
+      - run: dotnet restore RevitServerNet.sln
+      - run: dotnet build RevitServerNet.sln -c Release --no-restore
+      - run: dotnet test RevitServerNet.sln -c Release --no-build
+      - name: Pack release
+        shell: pwsh
+        run: ./scripts/pack-release.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/*
+          if-no-files-found: error
+      # The push comes before the GitHub release: a refused first publication of a package id can be fixed and the
+      # job run again, because --skip-duplicate makes the push repeatable and no release exists yet.
+      # Trusted publishing: the NuGet policy for this repository and workflow file exchanges the GitHub OIDC token for a short-lived key.
+      - uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: mahach
+      - name: Publish NuGet packages
+        shell: pwsh
+        run: |
+          foreach ($package in Get-ChildItem artifacts -Filter *.nupkg) {
+            dotnet nuget push $package.FullName --api-key '${{ steps.nuget-login.outputs.NUGET_API_KEY }}' --source https://api.nuget.org/v3/index.json --skip-duplicate
+            if ($LASTEXITCODE -ne 0) { throw "dotnet nuget push failed for $($package.Name) with exit code $LASTEXITCODE" }
+          }
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $files = @(Get-ChildItem artifacts -File | ForEach-Object { $_.FullName })
+          # A version with a hyphen is a prerelease.
+          $flags = @()
+          if ($version.Contains('-')) { $flags += '--prerelease' }
+          gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --notes-file release-notes.md @flags @files
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }

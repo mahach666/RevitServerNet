@@ -43,6 +43,8 @@ Direct export:
 - Arguments are quoted and escaped (quotes, spaces, trailing backslashes no longer break them); a destination without a directory works; the whole output is read before returning; a timeout kills the tool and waits for it to exit for at most 5 s, so a child process that keeps the output open no longer delays the `TimeoutException` (before, by up to its lifetime).
 - Direct export: the connection no longer holds its lock while connecting, so cancellation and cleanup never wait for a connect in progress.
 
+Project: documentation site at https://mahach666.github.io/RevitServerNet/ (guides moved there from the README, plus the API reference), a package icon and logo, links to DeepWiki, and GitHub Actions for CI, the docs site and releases (a tag `vX.Y.Z` publishes the package to nuget.org through trusted publishing and creates the GitHub release).
+
 Tests: wire tests built on the responses of the real servers, live tests for folders, history, locks, copy/move, the Admin UI API and export (run against Revit Server 2022 and 2025), and a test that blocks on every REST call from a single-threaded synchronization context.
 
 ## 1.3.0
