@@ -1,0 +1,29 @@
+{
+  "metadata": [
+    {
+      "src": [
+        { "src": ".", "files": ["RevitServerNet.csproj"] }
+      ],
+      "dest": "docs/api",
+      "properties": { "TargetFramework": "net8.0", "TargetFrameworks": "net8.0" },
+      "outputFormat": "apiPage"
+    }
+  ],
+  "build": {
+    "content": [
+      { "src": "docs", "files": ["*.md", "toc.yml", "api/**/*.yml", "api/**/*.md"] }
+    ],
+    "resource": [
+      { "src": "docs", "files": ["images/**"] }
+    ],
+    "output": "_site",
+    "globalMetadata": {
+      "_appTitle": "RevitServerNet",
+      "_appFooter": "RevitServerNet is licensed under the MIT License. Not affiliated with Autodesk.",
+      "_enableSearch": true,
+      "_appLogoPath": "images/revitservernet-logo.svg",
+      "_appFaviconPath": "images/revitservernet-logo.svg"
+    },
+    "template": ["default", "modern"]
+  }
+}

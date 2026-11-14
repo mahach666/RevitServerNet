@@ -139,8 +139,8 @@ namespace RevitServerNet.Tests
 
                 Assert.Null(ex.StatusCode);
                 Assert.Null(ex.ResponseContent);
-                Assert.Equal("API request failed", ex.Message);
                 Assert.IsType<WebException>(ex.InnerException);
+                Assert.Equal("API request failed: " + ex.InnerException.Message, ex.Message);
                 Assert.Contains("GET " + Service + "%7CA%7Cm.rvt/history", server.Requests);
             }
         }

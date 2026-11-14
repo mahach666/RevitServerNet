@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RevitServerNet
@@ -67,16 +68,53 @@ namespace RevitServerNet
         /// </summary>
         public string UserName => _userName;
 
+        private TimeSpan? _timeout;
+
+        /// <summary>
+        /// Time limit of one REST request, from sending it to reading the whole response. When it elapses the request is aborted
+        /// and a <see cref="RevitServerApiException"/> is thrown; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> means no limit.
+        /// null (the default) keeps the behaviour of the platform, as before this property existed: on .NET 6/8 HttpWebRequest
+        /// ends a request after 100 s, on .NET Framework its async calls have no limit.
+        /// </summary>
+        public TimeSpan? Timeout
+        {
+            get => _timeout;
+            set
+            {
+                // CancellationTokenSource.CancelAfter accepts at most int.MaxValue milliseconds (about 24.8 days) on .NET Framework
+                if (value.HasValue && value.Value != System.Threading.Timeout.InfiniteTimeSpan
+                    && (value.Value <= TimeSpan.Zero || value.Value.TotalMilliseconds > int.MaxValue))
+                    throw new ArgumentOutOfRangeException(nameof(value), "Timeout must be positive and at most int.MaxValue milliseconds, Timeout.InfiniteTimeSpan or null.");
+                _timeout = value;
+            }
+        }
+
+        // The server accepts only ASCII in header values (raw UTF-8 gets 400 "Missing or invalid User-Name"; HttpWebRequest throws
+        // on non-ASCII on .NET 8 and sends Latin-1 on .NET Framework). Anything else is sent percent-encoded, which the server accepts.
+        private static string EncodeHeaderValue(string value)
+        {
+            if (value == null)
+                return null;
+            foreach (var c in value)
+                if (c < 0x20 || c > 0x7E)
+                    return Uri.EscapeDataString(value);
+            return value;
+        }
+
         /// <summary>
         /// Performs GET request to API
         /// </summary>
         /// <param name="command">API command</param>
         /// <param name="additionalHeaders">Additional headers</param>
         /// <returns>JSON response from server</returns>
-        public async Task<string> GetAsync(string command, Dictionary<string, string> additionalHeaders = null)
-        {
-            return await ExecuteRequestAsync("GET", command, additionalHeaders);
-        }
+        public Task<string> GetAsync(string command, Dictionary<string, string> additionalHeaders = null)
+            => ExecuteRequestAsync("GET", command, additionalHeaders, null, CancellationToken.None);
+
+        /// <summary>
+        /// Performs GET request to API; the request is aborted when <paramref name="cancellationToken"/> is cancelled
+        /// </summary>
+        public Task<string> GetAsync(string command, Dictionary<string, string> additionalHeaders, CancellationToken cancellationToken)
+            => ExecuteRequestAsync("GET", command, additionalHeaders, null, cancellationToken);
 
         /// <summary>
         /// Performs POST request to API
@@ -85,10 +123,14 @@ namespace RevitServerNet
         /// <param name="data">Data to send</param>
         /// <param name="additionalHeaders">Additional headers</param>
         /// <returns>JSON response from server</returns>
-        public async Task<string> PostAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
-        {
-            return await ExecuteRequestAsync("POST", command, additionalHeaders, data);
-        }
+        public Task<string> PostAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
+            => ExecuteRequestAsync("POST", command, additionalHeaders, data, CancellationToken.None);
+
+        /// <summary>
+        /// Performs POST request to API; the request is aborted when <paramref name="cancellationToken"/> is cancelled
+        /// </summary>
+        public Task<string> PostAsync(string command, string data, Dictionary<string, string> additionalHeaders, CancellationToken cancellationToken)
+            => ExecuteRequestAsync("POST", command, additionalHeaders, data, cancellationToken);
 
         /// <summary>
         /// Performs PUT request to API
@@ -97,10 +139,14 @@ namespace RevitServerNet
         /// <param name="data">Data to send</param>
         /// <param name="additionalHeaders">Additional headers</param>
         /// <returns>JSON response from server</returns>
-        public async Task<string> PutAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
-        {
-            return await ExecuteRequestAsync("PUT", command, additionalHeaders, data);
-        }
+        public Task<string> PutAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)
+            => ExecuteRequestAsync("PUT", command, additionalHeaders, data, CancellationToken.None);
+
+        /// <summary>
+        /// Performs PUT request to API; the request is aborted when <paramref name="cancellationToken"/> is cancelled
+        /// </summary>
+        public Task<string> PutAsync(string command, string data, Dictionary<string, string> additionalHeaders, CancellationToken cancellationToken)
+            => ExecuteRequestAsync("PUT", command, additionalHeaders, data, cancellationToken);
 
         /// <summary>
         /// Performs DELETE request to API
@@ -108,10 +154,14 @@ namespace RevitServerNet
         /// <param name="command">API command</param>
         /// <param name="additionalHeaders">Additional headers</param>
         /// <returns>JSON response from server</returns>
-        public async Task<string> DeleteAsync(string command, Dictionary<string, string> additionalHeaders = null)
-        {
-            return await ExecuteRequestAsync("DELETE", command, additionalHeaders);
-        }
+        public Task<string> DeleteAsync(string command, Dictionary<string, string> additionalHeaders = null)
+            => ExecuteRequestAsync("DELETE", command, additionalHeaders, null, CancellationToken.None);
+
+        /// <summary>
+        /// Performs DELETE request to API; the request is aborted when <paramref name="cancellationToken"/> is cancelled
+        /// </summary>
+        public Task<string> DeleteAsync(string command, Dictionary<string, string> additionalHeaders, CancellationToken cancellationToken)
+            => ExecuteRequestAsync("DELETE", command, additionalHeaders, null, cancellationToken);
 
         /// <summary>
         /// Encodes path in API format: replaces separators with |, then percent-encodes
@@ -152,12 +202,13 @@ namespace RevitServerNet
         /// <param name="command">API command</param>
         /// <param name="additionalHeaders">Additional headers</param>
         /// <param name="data">Data to send</param>
+        /// <param name="cancellationToken">Aborts the request when cancelled</param>
         /// <returns>JSON response from server</returns>
-        private async Task<string> ExecuteRequestAsync(string method, string command, Dictionary<string, string> additionalHeaders = null, string data = null)
+        private async Task<string> ExecuteRequestAsync(string method, string command, Dictionary<string, string> additionalHeaders, string data, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var url = $"{_baseUrl}/{command}";
             var request = WebRequest.Create(url) as HttpWebRequest;
-            // Remove debug logging for release
             if (request == null)
                 throw new InvalidOperationException("Cannot create HTTP request");
 
@@ -184,36 +235,69 @@ namespace RevitServerNet
                 throw new InvalidOperationException("User name cannot be null or empty");
             if (string.IsNullOrEmpty(machineName))
                 throw new InvalidOperationException("Machine name cannot be null or empty");
-            request.Headers.Add("User-Name", _userName);
-            request.Headers.Add("User-Machine-Name", machineName);
+            request.Headers.Add("User-Name", EncodeHeaderValue(_userName));
+            request.Headers.Add("User-Machine-Name", EncodeHeaderValue(machineName));
             request.Headers.Add("Operation-GUID", operationGuid);
             // Add additional headers if provided
             if (additionalHeaders != null)
             {
                 foreach (var header in additionalHeaders)
                 {
-                    request.Headers.Add(header.Key, header.Value);
+                    request.Headers.Add(header.Key, EncodeHeaderValue(header.Value));
                 }
             }
+
+            // HttpWebRequest.Timeout is ignored by the async methods on .NET Framework, so a set limit is enforced here for both;
+            // on .NET 6/8 HttpWebRequest applies its own Timeout (default 100 s) too, so it gets the same value.
+            var timeout = _timeout;
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                if (timeout.HasValue)
+                {
+                    request.Timeout = timeout.Value == System.Threading.Timeout.InfiniteTimeSpan
+                        ? System.Threading.Timeout.Infinite
+                        : (int)timeout.Value.TotalMilliseconds;
+                    if (timeout.Value != System.Threading.Timeout.InfiniteTimeSpan)
+                        cts.CancelAfter(timeout.Value);
+                }
+                using (cts.Token.Register(request.Abort))
+                {
+                    try
+                    {
+                        return await SendAsync(request, method, data).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (cts.IsCancellationRequested && !(ex is RevitServerApiException apiEx && apiEx.StatusCode.HasValue))
+                    {
+                        // The request was aborted by the caller's token or by the timeout
+                        if (cancellationToken.IsCancellationRequested)
+                            throw new OperationCanceledException("API request was cancelled", ex, cancellationToken);
+                        throw new RevitServerApiException($"API request timed out after {timeout}", ex);
+                    }
+                }
+            }
+        }
+
+        private static async Task<string> SendAsync(HttpWebRequest request, string method, string data)
+        {
             if (!string.IsNullOrEmpty(data) && (method == "POST" || method == "PUT"))
             {
                 var bytes = Encoding.UTF8.GetBytes(data);
                 request.ContentLength = bytes.Length;
-                using (var stream = await request.GetRequestStreamAsync())
+                using (var stream = await request.GetRequestStreamAsync().ConfigureAwait(false))
                 {
-                    await stream.WriteAsync(bytes, 0, bytes.Length);
+                    await stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
                 }
             }
             try
             {
-                using (var response = await request.GetResponseAsync() as HttpWebResponse)
+                using (var response = await request.GetResponseAsync().ConfigureAwait(false) as HttpWebResponse)
                 using (var stream = response?.GetResponseStream())
                 {
                     if (stream == null)
                         return null;
                     using (var reader = new StreamReader(stream))
                     {
-                        return await reader.ReadToEndAsync();
+                        return await reader.ReadToEndAsync().ConfigureAwait(false);
                     }
                 }
             }
@@ -224,11 +308,11 @@ namespace RevitServerNet
                     using (var stream = errorResponse.GetResponseStream())
                     using (var reader = new StreamReader(stream))
                     {
-                        var errorContent = await reader.ReadToEndAsync();
+                        var errorContent = await reader.ReadToEndAsync().ConfigureAwait(false);
                         throw new RevitServerApiException($"API request failed with status {errorResponse.StatusCode}: {errorContent}", errorResponse.StatusCode, errorContent, ex);
                     }
                 }
-                throw new RevitServerApiException("API request failed", ex);
+                throw new RevitServerApiException($"API request failed: {ex.Message}", ex);
             }
         }
     }

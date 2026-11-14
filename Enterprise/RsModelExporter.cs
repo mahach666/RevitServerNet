@@ -287,22 +287,64 @@ namespace RevitServerNet.Enterprise
 			if (string.IsNullOrWhiteSpace(options.ModelPipePath)) throw new ArgumentException("ModelPipePath is required", nameof(options.ModelPipePath));
 			if (string.IsNullOrWhiteSpace(options.DestinationFile)) throw new ArgumentException("DestinationFile is required", nameof(options.DestinationFile));
 			if (string.IsNullOrWhiteSpace(options.RevitVersion)) throw new ArgumentException("RevitVersion is required", nameof(options.RevitVersion));
+			if (NormalizeModelPath(options.ModelPipePath).Length == 0)
+				throw new ArgumentException("ModelPipePath must name a model, not the root folder", nameof(options.ModelPipePath));
+			string destination;
+			try
+			{
+				destination = Path.GetFullPath(options.DestinationFile);
+			}
+			catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
+			{
+				throw new ArgumentException($"DestinationFile '{options.DestinationFile}' is not a valid file path: {ex.Message}", nameof(options.DestinationFile), ex);
+			}
+			var fileName = Path.GetFileName(destination);
+			// A ':' is allowed only in the drive of the path (.NET Framework takes "dir:name" for a file name "name").
+			if (fileName.Length == 0 || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || destination.IndexOf(':', Path.GetPathRoot(destination).Length) >= 0)
+				throw new ArgumentException($"DestinationFile '{options.DestinationFile}' does not end with a valid file name.", nameof(options.DestinationFile));
 			return RsModelServiceEndpoint.BuildUri(options.ServerHost, options.RevitVersion);
 		}
 
+		/// <summary>
+		/// The model path as the ModelService takes it: segments separated by single backslashes, without a leading or trailing separator.
+		/// The server rejects (ModelMissingFault) a path with a trailing, leading or doubled separator, while it accepts '/' as a separator;
+		/// the REST client (<see cref="RevitServerApi.EncodePath"/>) accepts all of these spellings, so the export does too.
+		/// </summary>
+		internal static string NormalizeModelPath(string modelPath)
+		{
+			if (string.IsNullOrWhiteSpace(modelPath)) return string.Empty;
+			return string.Join("\\", modelPath.Trim().Split(new[] { '|', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries));
+		}
+
+		/// <summary>
+		/// Fails before anything is downloaded when the destination cannot be written: a directory in its place, a read-only or open file
+		/// that would have to be replaced, a folder that cannot be written. Without it the failure comes only after the whole model has been
+		/// downloaded, with the server read lock held all that time. Nothing is changed: the existing file is opened without truncating it.
+		/// </summary>
 		private static void PrepareDestination(RsModelExporterOptions options)
 		{
-			var dir = Path.GetDirectoryName(options.DestinationFile);
-			if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-			if (File.Exists(options.DestinationFile) && !options.Overwrite)
-				throw new IOException("Destination file already exists. Set Overwrite=true to replace.");
+			var destination = Path.GetFullPath(options.DestinationFile);
+			var dir = Path.GetDirectoryName(destination);
+			if (Directory.Exists(destination))
+				throw new IOException($"Destination '{destination}' is an existing folder, not a file.");
+			Directory.CreateDirectory(dir);
+			if (File.Exists(destination))
+			{
+				if (!options.Overwrite)
+					throw new IOException("Destination file already exists. Set Overwrite=true to replace.");
+				// Replacing the file deletes it: needs write access (not read-only) and no other process holding it open.
+				using (new FileStream(destination, FileMode.Open, FileAccess.Write, FileShare.None)) { }
+			}
+			// Same folder and name pattern as the file MoveToDestination creates.
+			var probe = Path.Combine(dir, Path.GetFileName(destination) + "." + Guid.NewGuid().ToString("N") + ".partial");
+			using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose)) { }
 		}
 
 		private static string Export(RsModelExporterOptions options, Uri endpoint, IProgress<long> progress, CancellationToken ct,
 			Func<RsModelExporterOptions, Uri, string, IModelExportSession> sessionFactory, RsExportRetryPolicy retryPolicy)
 		{
 			var serverHost = options.ServerHost.Trim();
-			var modelPath = PathUtils.ConvertPipePathToRelativeWindowsPath(options.ModelPipePath);
+			var modelPath = NormalizeModelPath(options.ModelPipePath);
 			var where = $"model '{options.ModelPipePath}' at {endpoint}";
 			var userName = ExportUserName;
 
@@ -322,11 +364,11 @@ namespace RevitServerNet.Enterprise
 				try
 				{
 					using (ct.Register(session.Abort))
-						Call("IdentifyModel", where, ct, () =>
+						Call("IdentifyModel", where, ct, () => RunUntilCancelled(ct, $"Export of {where} was cancelled during IdentifyModel.", () =>
 						{
 							session.IdentifyModel(ct);
 							return true;
-						});
+						}));
 
 					var modelMutex = AcquireModelMutex(userName, modelPath, serverHost, where, ct);
 					try
@@ -540,6 +582,27 @@ namespace RevitServerNet.Enterprise
 				mutex.Dispose();
 				throw;
 			}
+		}
+
+		/// <summary>
+		/// Runs <paramref name="call"/> on its own thread-pool task and returns as soon as it completes or <paramref name="ct"/> is cancelled.
+		/// For the first call of a session: WCF connects to the server inside it, and aborting the channel does not end a connect that is
+		/// still pending (an unreachable host: the call ends only when the OS gives up on the connection, about 20 s), so waiting on the
+		/// call itself would leave a cancelled export hanging. After a cancellation the call is left to end on its own (its channel was
+		/// aborted by the caller); nothing is lost, as the server has not been asked for anything yet.
+		/// </summary>
+		private static T RunUntilCancelled<T>(CancellationToken ct, string cancelledMessage, Func<T> call)
+		{
+			if (!ct.CanBeCanceled) return call();
+			var task = Task.Run(call, CancellationToken.None);
+			WaitHandle.WaitAny(new[] { ((IAsyncResult)task).AsyncWaitHandle, ct.WaitHandle });
+			if (!task.IsCompleted)
+			{
+				// Observe the orphaned call's failure: it is expected (the channel was aborted) and nobody awaits it.
+				task.ContinueWith(t => { var ignored = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+				throw new OperationCanceledException(cancelledMessage, ct);
+			}
+			return task.GetAwaiter().GetResult();
 		}
 
 		/// <summary>
@@ -873,7 +936,7 @@ namespace RevitServerNet.Enterprise
 				var assemblies = RsAssemblyLoader.Load(options.RevitVersion, options.AssembliesPath);
 				_api = RsModelServiceApi.For(assemblies);
 				_serverHost = options.ServerHost.Trim();
-				_modelPath = PathUtils.ConvertPipePathToRelativeWindowsPath(options.ModelPipePath);
+				_modelPath = NormalizeModelPath(options.ModelPipePath);
 				_where = where;
 				_modelLocation = _api.NewModelLocation(_serverHost, _modelPath);
 				_connection = new ModelServiceConnection(_api, endpoint);
@@ -966,73 +1029,93 @@ namespace RevitServerNet.Enterprise
 			/// </summary>
 			public object GetChannel(CancellationToken ct)
 			{
-				var channel = GetChannel();
+				// Also stops a call that was abandoned after the cancellation (see RunUntilCancelled) before it opens a new channel.
 				ct.ThrowIfCancellationRequested();
+				var channel = GetChannel();
+				if (ct.IsCancellationRequested)
+				{
+					Abort();
+					ct.ThrowIfCancellationRequested();
+				}
 				return channel;
 			}
 
 			public object GetChannel()
 			{
+				ICommunicationObject stale;
 				lock (_gate)
 				{
 					if (_channel != null && _channel.State == CommunicationState.Opened) return _channel;
-					AbortCore();
-					var factoryType = typeof(ChannelFactory<>).MakeGenericType(_api.ModelServiceType);
-					ChannelFactory factory;
-					try
-					{
-						factory = (ChannelFactory)CreateInstance(factoryType, RsModelServiceEndpoint.CreateBinding(), new EndpointAddress(_endpoint));
-					}
-					catch (Exception ex)
-					{
-						// For example a set built for .NET 8 (Revit 2025 and later) loaded on .NET Framework.
-						throw new InvalidOperationException(
-							$"The WCF client for IModelService could not be created from the Revit Server client assemblies in '{_api.Directory}'"
-							+ $"{RsAssemblyLoader.DescribeSkipped(_api.SkippedCandidates)}: {ex.Message}", ex);
-					}
-					// As Autodesk's own client: no limit on the number of serialized objects per message.
-					foreach (var operation in factory.Endpoint.Contract.Operations)
-					{
-						var serializer = operation.Behaviors.Find<DataContractSerializerOperationBehavior>();
-						if (serializer != null) serializer.MaxItemsInObjectGraph = int.MaxValue;
-					}
-					_factory = factory;
-					factory.Open();
-					var channel = (ICommunicationObject)InvokeMethod(factoryType.GetMethod("CreateChannel", Type.EmptyTypes), factory);
-					_channel = channel;
-					channel.Open();
-					return channel;
+					stale = TakeAll(out var staleFactory);
+					staleFactory?.Abort();
 				}
+				stale?.Abort();
+				var factoryType = typeof(ChannelFactory<>).MakeGenericType(_api.ModelServiceType);
+				ChannelFactory factory;
+				try
+				{
+					factory = (ChannelFactory)CreateInstance(factoryType, RsModelServiceEndpoint.CreateBinding(), new EndpointAddress(_endpoint));
+				}
+				catch (Exception ex)
+				{
+					// For example a set built for .NET 8 (Revit 2025 and later) loaded on .NET Framework.
+					throw new InvalidOperationException(
+						$"The WCF client for IModelService could not be created from the Revit Server client assemblies in '{_api.Directory}'"
+						+ $"{RsAssemblyLoader.DescribeSkipped(_api.SkippedCandidates)}: {ex.Message}", ex);
+				}
+				// As Autodesk's own client: no limit on the number of serialized objects per message.
+				foreach (var operation in factory.Endpoint.Contract.Operations)
+				{
+					var serializer = operation.Behaviors.Find<DataContractSerializerOperationBehavior>();
+					if (serializer != null) serializer.MaxItemsInObjectGraph = int.MaxValue;
+				}
+				// The gate is not held while connecting: Abort and Dispose (the cancellation) must not wait for a pending connect.
+				// Each object is published before it is opened, so that Abort reaches it.
+				lock (_gate) _factory = factory;
+				factory.Open();
+				var channel = (ICommunicationObject)InvokeMethod(factoryType.GetMethod("CreateChannel", Type.EmptyTypes), factory);
+				bool aborted;
+				lock (_gate)
+				{
+					aborted = _factory != factory;
+					if (!aborted) _channel = channel;
+				}
+				if (aborted)
+				{
+					channel.Abort();
+					throw new CommunicationObjectAbortedException("The connection was aborted while it was being created.");
+				}
+				channel.Open();
+				return channel;
 			}
 
 			/// <summary>
-			/// Aborts the channel and the factory (cancellation): a blocked call fails at once.
+			/// Aborts the channel and the factory (cancellation): a blocked call fails at once. Never waits for a connect in progress.
 			/// </summary>
 			public void Abort()
 			{
-				lock (_gate) AbortCore();
+				ICommunicationObject channel, factory;
+				lock (_gate) { channel = TakeAll(out var f); factory = f; }
+				channel?.Abort();
+				factory?.Abort();
 			}
 
 			public void Dispose()
 			{
 				ICommunicationObject channel, factory;
-				lock (_gate)
-				{
-					channel = _channel;
-					factory = _factory;
-					_channel = null;
-					_factory = null;
-				}
+				lock (_gate) { channel = TakeAll(out var f); factory = f; }
 				CloseOrAbort(channel);
 				CloseOrAbort(factory);
 			}
 
-			private void AbortCore()
+			// Under the gate: takes the references, so that they are aborted or closed outside of it.
+			private ICommunicationObject TakeAll(out ICommunicationObject factory)
 			{
-				_channel?.Abort();
-				_factory?.Abort();
+				var channel = _channel;
+				factory = _factory;
 				_channel = null;
 				_factory = null;
+				return channel;
 			}
 
 			private static void CloseOrAbort(ICommunicationObject obj)

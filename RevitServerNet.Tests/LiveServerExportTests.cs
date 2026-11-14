@@ -72,6 +72,7 @@ namespace RevitServerNet.Tests
     /// of the export's user name, which exports from another process (for example the other target framework's test host in a runner that
     /// runs them in parallel) would hold at the same time.
     /// </summary>
+    [Collection(LiveRevitServerCollection.Name)]
     public class LiveServerExportTests : IDisposable
     {
         private readonly Semaphore _liveTestsLock;

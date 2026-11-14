@@ -501,9 +501,23 @@ namespace RevitServerNet.Tests
                 var options = Options(temp, overwrite: true);
                 Directory.CreateDirectory(Path.GetDirectoryName(options.DestinationFile));
                 File.WriteAllText(options.DestinationFile, "previous");
+                // The destination is free when the export starts and in use when the file is moved there.
+                FileStream holder = null;
+                var generate = session.Generate;
+                session.Generate = (dataDir, version, rvtPath) =>
+                {
+                    generate(dataDir, version, rvtPath);
+                    holder = new FileStream(options.DestinationFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+                };
 
-                using (new FileStream(options.DestinationFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                try
+                {
                     await Assert.ThrowsAsync<IOException>(() => Export(options, session));
+                }
+                finally
+                {
+                    holder?.Dispose();
+                }
 
                 Assert.Equal("previous", File.ReadAllText(options.DestinationFile));
                 Assert.Equal(1, session.Count("UnlockData"));
@@ -602,6 +616,392 @@ namespace RevitServerNet.Tests
         {
             using (var temp = new TempDirectory())
                 RsModelExporter.SweepStaleWorkDirectories(temp.Path("missing"), DateTime.UtcNow);
+        }
+
+        // ---- model data listing ----
+
+        [Theory]
+        [InlineData("ModelDoesNotExist", "does not exist")]
+        [InlineData("ModelInUse", "in use")]
+        [InlineData("ModelCorrupt", "corrupt")]
+        [InlineData("Failed", "could not list the model data files")]
+        public async Task ListingStatusOtherThanSuccess_IsReportedWithItsExplanation_AndReleasesTheLockOnce(string status, string explanation)
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { ListStatus = status };
+                var options = Options(temp);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                Assert.Contains($"GetListOfModelDataFilesWithoutLocking returned {status}", ex.Message);
+                Assert.Contains(explanation, ex.Message);
+                Assert.Contains(options.ModelPipePath, ex.Message);
+                Assert.Equal(1, session.Count("UnlockData"));
+                Assert.Equal(0, session.Calls.Count(c => c.StartsWith("DownloadFile")));
+                Assert.False(File.Exists(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task EmptyOrMissingFileList_IsReported_AndReleasesTheLockOnce()
+        {
+            foreach (var files in new List<string>[] { new List<string>(), null })
+            {
+                using (var temp = new TempDirectory())
+                {
+                    var session = new FakeSession { Files = files };
+                    var options = Options(temp);
+
+                    var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                    Assert.Contains("returned no model data files", ex.Message);
+                    Assert.Equal(1, session.Count("UnlockData"));
+                    Assert.Equal(0, session.Count("GenerateRvtFile"));
+                    AssertNoLeftovers(options);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("dir/")]
+        [InlineData("")]
+        public async Task ListedNameWithoutAFileName_IsReported_AndReleasesTheLockOnce(string listed)
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { Files = new List<string> { "a.dat", listed } };
+                var options = Options(temp);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                Assert.Contains($"invalid file name '{listed}'", ex.Message);
+                Assert.Equal(1, session.Count("UnlockData"));
+                Assert.Equal(0, session.Count("DownloadFile " + listed));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task TwoListedFilesWithTheSameName_FailTheSecondDownload_AndReleaseTheLockOnce()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { Files = new List<string> { "x/a.dat", "y/a.dat" } };
+                var options = Options(temp);
+
+                await Assert.ThrowsAsync<IOException>(() => Export(options, session));
+
+                Assert.Equal(1, session.Count("UnlockData"));
+                Assert.Equal(0, session.Count("GenerateRvtFile"));
+                Assert.False(File.Exists(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        // ---- IdentifyModel ----
+
+        [Fact]
+        public async Task IdentifyModelFailure_EndsTheExportBeforeTheMutexAndTheLock()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { Identify = ct => throw new FaultException("Model Tests\\x.rvt was not found") };
+                var options = Options(temp);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                Assert.StartsWith("IdentifyModel failed for model", ex.Message);
+                Assert.IsAssignableFrom<FaultException>(ex.InnerException);
+                Assert.Equal(new[] { "IdentifyModel", "Close" }, session.Calls);
+                Assert.False(File.Exists(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task IdentifyModelReturningNoIdentity_EndsTheExportBeforeTheLock()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { Identify = ct => throw new InvalidOperationException("IdentifyModel returned no valid model identity.") };
+                var options = Options(temp);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                Assert.Contains("no valid model identity", ex.Message);
+                Assert.Equal(0, session.Count("LockData"));
+                Assert.Equal(0, session.Count("UnlockData"));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        /// <summary>
+        /// WCF connects inside the first call, and aborting the channel does not end a connect that is pending (an unreachable host: about
+        /// 20 s until the OS gives up). The export must still end when the token is cancelled.
+        /// </summary>
+        [Fact]
+        public async Task CancellationWhileIdentifyModelIsStuckInTheConnect_EndsTheExportAtOnce()
+        {
+            using (var temp = new TempDirectory())
+            using (var cts = new CancellationTokenSource())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                // Ignores the abort, like the pending connect.
+                var session = new FakeSession { Identify = ct => { entered.Set(); release.Wait(); } };
+                var options = Options(temp);
+                try
+                {
+                    var export = Export(options, session, ct: cts.Token);
+                    Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+
+                    cts.Cancel();
+                    var finished = await Task.WhenAny(export, Task.Delay(TimeSpan.FromSeconds(5)));
+
+                    Assert.Same(export, finished);
+                    var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => export);
+                    Assert.Contains("cancelled during IdentifyModel", ex.Message);
+                    Assert.Contains("Abort", session.Calls);
+                    Assert.Equal(0, session.Count("LockData"));
+                    Assert.Equal(0, session.Count("UnlockData"));
+                    AssertNoLeftovers(options);
+                }
+                finally
+                {
+                    release.Set();
+                }
+            }
+        }
+
+        [Fact]
+        public async Task IdentifyModelFailingAfterTheCancellation_IsObservedAndDoesNotChangeTheResult()
+        {
+            using (var temp = new TempDirectory())
+            using (var cts = new CancellationTokenSource())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                // Only this test's exception counts: UnobservedTaskException is process-wide and other classes run in parallel.
+                var marker = new CommunicationObjectAbortedException("aborted " + Guid.NewGuid());
+                var unobserved = new List<Exception>();
+                EventHandler<UnobservedTaskExceptionEventArgs> handler = (s, e) =>
+                {
+                    if (e.Exception.Flatten().InnerExceptions.Contains(marker)) lock (unobserved) unobserved.Add(e.Exception);
+                };
+                TaskScheduler.UnobservedTaskException += handler;
+                try
+                {
+                    var session = new FakeSession { Identify = ct => { entered.Set(); release.Wait(); throw marker; } };
+                    var options = Options(temp);
+                    var export = Export(options, session, ct: cts.Token);
+                    Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => export);
+
+                    // The abandoned call fails now; the export is already over.
+                    release.Set();
+                    Thread.Sleep(200);
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+
+                    lock (unobserved) Assert.Empty(unobserved);
+                }
+                finally
+                {
+                    TaskScheduler.UnobservedTaskException -= handler;
+                }
+            }
+        }
+
+        // ---- CreateLocal ----
+
+        [Fact]
+        public async Task CreateLocalNotSupported_KeepsTheExceptionType_WritesNothing_AndTheLockWasReleasedBefore()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { MakeLocal = () => throw new NotSupportedException("BasicFileInfo stream version 9 is too new") };
+                var options = Options(temp, createLocal: true);
+
+                var ex = await Assert.ThrowsAsync<NotSupportedException>(() => Export(options, session));
+
+                Assert.StartsWith("CreateLocal failed for model", ex.Message);
+                Assert.Contains("too new", ex.Message);
+                Assert.IsType<NotSupportedException>(ex.InnerException);
+                var calls = session.Calls;
+                Assert.True(calls.IndexOf("UnlockData") < calls.IndexOf("MakeCreatedLocal"));
+                Assert.Equal(1, session.Count("UnlockData"));
+                Assert.False(File.Exists(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task CreateLocalFailure_OtherThanNotSupported_IsWrappedInInvalidOperation()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession { MakeLocal = () => throw new IOException("disk full") };
+                var options = Options(temp, createLocal: true);
+
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Export(options, session));
+
+                Assert.StartsWith("CreateLocal failed for model", ex.Message);
+                Assert.Contains("disk full", ex.Message);
+                Assert.IsType<IOException>(ex.InnerException);
+                Assert.False(File.Exists(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        // ---- destination checked before the download ----
+
+        [Fact]
+        public async Task ReadOnlyDestinationWithOverwrite_FailsBeforeTheServerIsContacted_AndIsKept()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var factoryCalls = 0;
+                var options = Options(temp, overwrite: true);
+                Directory.CreateDirectory(Path.GetDirectoryName(options.DestinationFile));
+                File.WriteAllText(options.DestinationFile, "previous");
+                File.SetAttributes(options.DestinationFile, FileAttributes.ReadOnly);
+                try
+                {
+                    await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                        new RsModelExporter().ExportAsync(options, null, CancellationToken.None, (o, e, w) => { factoryCalls++; return new FakeSession(); }, NoDelays));
+                }
+                finally
+                {
+                    File.SetAttributes(options.DestinationFile, FileAttributes.Normal);
+                }
+
+                Assert.Equal(0, factoryCalls);
+                Assert.Equal("previous", File.ReadAllText(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task DestinationOpenInAnotherProcessWithOverwrite_FailsBeforeTheServerIsContacted_AndIsKept()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var factoryCalls = 0;
+                var options = Options(temp, overwrite: true);
+                Directory.CreateDirectory(Path.GetDirectoryName(options.DestinationFile));
+                File.WriteAllText(options.DestinationFile, "previous");
+
+                using (new FileStream(options.DestinationFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    await Assert.ThrowsAsync<IOException>(() =>
+                        new RsModelExporter().ExportAsync(options, null, CancellationToken.None, (o, e, w) => { factoryCalls++; return new FakeSession(); }, NoDelays));
+
+                Assert.Equal(0, factoryCalls);
+                Assert.Equal("previous", File.ReadAllText(options.DestinationFile));
+                AssertNoLeftovers(options);
+            }
+        }
+
+        [Fact]
+        public async Task DestinationThatIsAFolder_FailsBeforeTheServerIsContacted()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var factoryCalls = 0;
+                var options = Options(temp, overwrite: true);
+                Directory.CreateDirectory(options.DestinationFile);
+
+                var ex = await Assert.ThrowsAsync<IOException>(() =>
+                    new RsModelExporter().ExportAsync(options, null, CancellationToken.None, (o, e, w) => { factoryCalls++; return new FakeSession(); }, NoDelays));
+
+                Assert.Contains("is an existing folder", ex.Message);
+                Assert.Equal(0, factoryCalls);
+                Assert.True(Directory.Exists(options.DestinationFile));
+            }
+        }
+
+        [Fact]
+        public async Task WritableNewDestination_IsProbedWithoutLeavingAnything()
+        {
+            using (var temp = new TempDirectory())
+            {
+                var session = new FakeSession();
+                var options = Options(temp);
+
+                await Export(options, session);
+
+                AssertNoLeftovers(options);
+                Assert.Equal(new[] { "model.rvt" }, Directory.GetFileSystemEntries(Path.GetDirectoryName(options.DestinationFile)).Select(Path.GetFileName).ToArray());
+            }
+        }
+
+        [Theory]
+        [InlineData("a<b>.rvt")]
+        [InlineData("a|b.rvt")]
+        [InlineData("a?.rvt")]
+        [InlineData("dir:model.rvt")]
+        [InlineData(@"out\")]
+        public void DestinationWithoutAValidFileName_IsRejectedByTheOptionsCheck(string destinationName)
+        {
+            using (var temp = new TempDirectory())
+            {
+                var options = Options(temp);
+                options.DestinationFile = temp.Root + Path.DirectorySeparatorChar + destinationName;
+
+                var ex = Assert.Throws<ArgumentException>(() => RsModelExporter.ValidateOptions(options));
+
+                Assert.Equal("DestinationFile", ex.ParamName);
+                Assert.False(Directory.Exists(Path.Combine(temp.Root, "out")));
+            }
+        }
+
+        [Fact]
+        public void ValidOptions_PassTheOptionsCheck()
+        {
+            using (var temp = new TempDirectory())
+                Assert.Equal("net.tcp", RsModelExporter.ValidateOptions(Options(temp)).Scheme);
+        }
+
+        [Theory]
+        [InlineData("|")]
+        [InlineData("||")]
+        [InlineData(@"\")]
+        public void ModelPathWithoutAnyName_IsRejectedByTheOptionsCheck(string modelPath)
+        {
+            using (var temp = new TempDirectory())
+            {
+                var options = Options(temp);
+                options.ModelPipePath = modelPath;
+
+                Assert.Equal("ModelPipePath", Assert.Throws<ArgumentException>(() => RsModelExporter.ValidateOptions(options)).ParamName);
+            }
+        }
+
+        // ---- model path ----
+
+        // The ModelService answered ModelMissingFault for the doubled, leading and trailing separators (Revit Server 2022 and 2025)
+        // and found the model for the other spellings.
+        [Theory]
+        [InlineData("|Test|Model.rvt", @"Test\Model.rvt")]
+        [InlineData("|Test|Model.rvt|", @"Test\Model.rvt")]
+        [InlineData("|Test|Model.rvt||", @"Test\Model.rvt")]
+        [InlineData("||Test||Model.rvt", @"Test\Model.rvt")]
+        [InlineData("Test|Model.rvt", @"Test\Model.rvt")]
+        [InlineData("Test/Model.rvt", @"Test\Model.rvt")]
+        [InlineData("|Test/Sub|Model.rvt", @"Test\Sub\Model.rvt")]
+        [InlineData(@"Test\Model.rvt", @"Test\Model.rvt")]
+        [InlineData(@"\Test\Model.rvt\", @"Test\Model.rvt")]
+        [InlineData("  |Test|Model.rvt|  ", @"Test\Model.rvt")]
+        [InlineData("|Test|Модель #1.rvt", @"Test\Модель #1.rvt")]
+        [InlineData("|", "")]
+        [InlineData("", "")]
+        [InlineData(null, "")]
+        public void NormalizeModelPath_GivesSingleBackslashSeparatorsWithoutLeadingOrTrailingOnes(string given, string expected)
+        {
+            Assert.Equal(expected, RsModelExporter.NormalizeModelPath(given));
         }
 
         // ---- LockData retry helper ----
@@ -750,6 +1150,49 @@ namespace RevitServerNet.Tests
             }
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ModelMutex_AbandonedByItsOwner_IsOwnedByTheNextExport(bool cancellableToken)
+        {
+            var model = @"Tests\" + Guid.NewGuid().ToString("N") + ".rvt";
+            var name = RsModelExporter.GetModelMutexName("RevitServerNet.Tests", model, "host");
+            Mutex abandoned = null;
+            // A thread that ends while it owns the mutex abandons it (a crashed exporter); the handle stays open here.
+            var owner = new Thread(() =>
+            {
+                abandoned = new Mutex(false, name);
+                abandoned.WaitOne();
+            }) { IsBackground = true };
+            owner.Start();
+            Assert.True(owner.Join(TimeSpan.FromSeconds(10)));
+            try
+            {
+                using (var cts = new CancellationTokenSource())
+                {
+                    var token = cancellableToken ? cts.Token : CancellationToken.None;
+                    var errors = new List<Exception>();
+                    var acquired = false;
+                    // A mutex is released by the thread that owns it.
+                    var next = Run(() =>
+                    {
+                        var mutex = RsModelExporter.AcquireModelMutex("RevitServerNet.Tests", model, "host", "test model", token);
+                        acquired = true;
+                        mutex.ReleaseMutex();
+                        mutex.Dispose();
+                    }, errors);
+                    Assert.True(next.Join(TimeSpan.FromSeconds(10)));
+                    Assert.Empty(errors);
+                    Assert.True(acquired);
+                }
+            }
+            finally
+            {
+                GC.KeepAlive(abandoned);
+                abandoned?.Dispose();
+            }
+        }
+
         [Fact]
         public void ModelMutex_CancelledWait_ThrowsWithoutTakingTheMutex()
         {
@@ -836,6 +1279,9 @@ namespace RevitServerNet.Tests
                 return "Locked";
             };
             public List<string> Files = new List<string> { "a.dat", "b.dat" };
+            public string ListStatus = "Success";
+            public Action<CancellationToken> Identify = ct => { };
+            public Action MakeLocal = () => { };
             public Func<string, Stream> OpenStream = file => new MemoryStream(Enumerable.Repeat((byte)7, (int)FileSize).ToArray());
             public Action DisposeResponse = () => { };
             public Func<object> FormatVersion = () => "Latest";
@@ -860,7 +1306,11 @@ namespace RevitServerNet.Tests
                 lock (_calls) _calls.Add(call);
             }
 
-            public void IdentifyModel(CancellationToken ct) => Record("IdentifyModel");
+            public void IdentifyModel(CancellationToken ct)
+            {
+                Record("IdentifyModel");
+                Identify(ct);
+            }
 
             public string LockData(Action lockMayBeHeld, CancellationToken ct)
             {
@@ -872,7 +1322,7 @@ namespace RevitServerNet.Tests
             {
                 Record("GetListOfModelDataFiles");
                 files = Files;
-                return "Success";
+                return ListStatus;
             }
 
             public IDisposable DownloadFile(string file, CancellationToken ct, out Stream stream)
@@ -908,7 +1358,11 @@ namespace RevitServerNet.Tests
                 Generate(dataDirectory, dataFormatVersion, rvtPath);
             }
 
-            public void MakeCreatedLocal(string rvtPath, object dataFormatVersion) => Record("MakeCreatedLocal");
+            public void MakeCreatedLocal(string rvtPath, object dataFormatVersion)
+            {
+                Record("MakeCreatedLocal");
+                MakeLocal();
+            }
 
             private sealed class Response : IDisposable
             {

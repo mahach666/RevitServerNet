@@ -1,0 +1,25 @@
+- name: Getting started
+  href: getting-started.md
+- name: Guides
+  href: rest-api.md
+  items:
+    - name: REST API
+      href: rest-api.md
+    - name: Admin UI API
+      href: admin-ui-api.md
+    - name: Direct export
+      href: direct-export.md
+    - name: RevitServerTool wrapper
+      href: revitservertool.md
+    - name: Error handling
+      href: error-handling.md
+    - name: Versions and compatibility
+      href: versions-and-compatibility.md
+    - name: Testing
+      href: testing.md
+- name: API reference
+  href: api/
+- name: GitHub
+  href: https://github.com/mahach666/RevitServerNet
+- name: DeepWiki
+  href: https://deepwiki.com/mahach666/RevitServerNet

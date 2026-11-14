@@ -17,11 +17,13 @@ namespace RevitServerNet
 
         /// <summary>
         /// Model path in Revit Server pipe format (e.g. "|Projects|MyProj|model.rvt") or Windows-style relative path (e.g. "Projects\\MyProj\\model.rvt").
+        /// Leading, trailing and doubled separators are ignored, and '/' is a separator too (as in the REST client).
         /// </summary>
         public string ModelPipePath { get; set; }
 
         /// <summary>
-        /// Destination RVT file path to create.
+        /// Destination RVT file path to create. It is checked before anything is downloaded: it must end with a valid file name, must not be an
+        /// existing folder, and with <see cref="Overwrite"/> an existing file must be writable and not open in another process.
         /// </summary>
         public string DestinationFile { get; set; }
 
@@ -46,7 +48,8 @@ namespace RevitServerNet
 
         /// <summary>
         /// Write the BasicFileInfo of a local copy, as RevitServerTool createLocalRVT does: worksharing state "Created Local",
-        /// central path RSN://{ServerHost}/{model path}, the server model as central, a new model identity.
+        /// central path RSN://{ServerHost}/{model path} (ServerHost as given, including a port: RevitServerTool writes the name it was given to -s),
+        /// the server model as central, a new model identity.
         /// Default false: the file keeps the server's BasicFileInfo (central model), as in earlier versions.
         /// </summary>
         public bool CreateLocal { get; set; }
@@ -59,13 +62,15 @@ namespace RevitServerNet
     {
         /// <summary>
         /// Export a Revit Server model to a local RVT file using RS libraries directly.
-        /// Overlapping exports of the same model are serialized only within one Windows session and only when ServerHost and
-        /// ModelPipePath are spelled the same; otherwise one export can release the other's server read lock.
+        /// Overlapping exports of the same model are serialized only within one Windows session and only when ServerHost is spelled
+        /// the same and ModelPipePath has the same case (path separators are normalized); otherwise one export can release the other's
+        /// server read lock.
         /// </summary>
         /// <param name="options">Export options (required)</param>
         /// <param name="bytesProgress">Optional progress reporter: bytes downloaded so far of the current model data file.
         /// Called on a thread-pool thread: use System.Progress&lt;T&gt; or marshal to the UI thread yourself.</param>
-        /// <param name="cancellationToken">Cancels the export; the server read lock is still released and the temp folder deleted</param>
+        /// <param name="cancellationToken">Cancels the export, also while it is still connecting to an unreachable server; the server read lock
+        /// is still released and the temp folder deleted</param>
         /// <returns>Path to the created RVT file</returns>
         public static async Task<string> ExportAsync(ModelExporterOptions options, IProgress<long> bytesProgress = null, CancellationToken cancellationToken = default)
         {
