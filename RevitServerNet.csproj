@@ -33,7 +33,7 @@
 
   <ItemGroup Condition="'$(TargetFramework)'!='net48'">
     <PackageReference Include="System.ServiceModel.Primitives" Version="4.9.0" />
-    <PackageReference Include="System.ServiceModel.NetTcp" Version="4.9.0" />
+    <PackageReference Include="System.ServiceModel.NetTcp" Version="10.1.0" />
   </ItemGroup>
 
   <!-- Bundled Autodesk Revit Server client assemblies (the Revit 2024 set, unmodified), flat under RSAssemblies\:
