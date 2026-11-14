@@ -1,5 +1,9 @@
 # CHANGES
 
+## Unreleased
+
+- Dependency: Newtonsoft.Json 13.0.4 (was 13.0.3). The test project uses Microsoft.NET.Test.Sdk 18.12.0.
+
 ## 1.4.0
 
 Fixes found by checking every REST, Admin UI and export call against live Revit Server 2022 and 2025 (docker test stand; net48 and net8.0). Both servers answered identically in everything checked.
