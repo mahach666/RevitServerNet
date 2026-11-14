@@ -40,8 +40,8 @@ namespace RevitServerNet.Tests
 
                 Assert.Null(ex.StatusCode);
                 Assert.Null(ex.ResponseContent);
-                Assert.Equal("UI API request failed", ex.Message);
                 Assert.IsType<WebException>(ex.InnerException);
+                Assert.Equal("UI API request failed: " + ex.InnerException.Message, ex.Message);
             }
         }
 

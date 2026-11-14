@@ -90,7 +90,8 @@ var api = new RevitServerApi(
 ```csharp
 // Get server information (GET serverproperties)
 ServerInfo serverInfo = await api.GetServerInfoAsync();
-Console.WriteLine($"{serverInfo?.Name} {serverInfo?.Version}");
+// The server reports no name or version: Version is the year this client was created with, Name stays null
+Console.WriteLine($"{serverInfo?.MachineName} {serverInfo?.Version}");
 
 // Check that the server responds and returns non-empty properties.
 // Never throws: any exception yields false.
@@ -106,13 +107,15 @@ var folders = await api.ListFoldersAsync("|Projects");
 // Or everything in the folder: Folders, Models, Files, DriveSpace, DriveFreeSpace
 FolderContents contents = await api.GetFolderContentsAsync("|Projects");
 
-// Create a new folder: parent folder path + new folder name
-var created = await api.CreateFolderAsync("|Projects", "NewProject");
-if (!created.Success) Console.WriteLine(created.Message);
+// Create a new folder: parent folder path + new folder name (HTTP errors are thrown as RevitServerApiException)
+await api.CreateFolderAsync("|Projects", "NewProject");
 
-// Delete a folder (failures are returned in the result, not thrown)
+// Delete a folder with all its contents (HTTP failures are returned in the result, not thrown)
 var deleted = await api.DeleteFolderAsync("|Projects|OldProject");
 if (!deleted.Success) Console.WriteLine(deleted.Message);
+
+// Rename: newName must be a non-empty name (the server's rename with an empty name deletes, so the library refuses it)
+var renamed = await api.RenameFolderAsync("|Projects|NewProject", "Project2");
 ```
 
 ### Project Operations
@@ -126,7 +129,7 @@ foreach (var p in projectInfo)
 // Get model history (per model file: GET {modelPath}/history)
 ModelHistory history = await api.GetModelHistoryAsync("|Projects|MyProject|file.rvt");
 foreach (var h in history.Items)
-    Console.WriteLine($"{h.Version} {h.User} {h.Date} {h.Comment}");
+    Console.WriteLine($"{h.Version} {h.User} {h.DateUtc} {h.Comment}"); // Date is the raw "/Date(ms)/" string, DateUtc the parsed value
 
 // Client-side filtering/paging (the REST endpoint has no paging); newest versions first
 var last10 = await api.GetModelHistoryAsync("|Projects|MyProject|file.rvt", take: 10);
@@ -141,11 +144,12 @@ var locked = await api.LockItemAsync("|Projects|MyProject|file.rvt");
 // Unlock a model (or folder)
 OperationResult unlocked = await api.UnlockItemAsync("|Projects|MyProject|file.rvt");
 
-// Get lock information of a model (GET {modelPath}/lock)
+// Lock state of a model or folder (GET {path}/directoryinfo); null when unlocked
 LockInfo lockInfo = await api.GetModelLockAsync("|Projects|MyProject|file.rvt");
-Console.WriteLine(lockInfo?.UserName);
+Console.WriteLine(lockInfo?.LockState);
 
 bool isLocked = await api.IsModelLockedAsync("|Projects|MyProject|file.rvt");
+// The REST service names the owner only for a lock in progress; otherwise null
 string lockedBy = await api.GetModelLockUserAsync("|Projects|MyProject|file.rvt");
 ```
 
@@ -204,7 +208,7 @@ await api.CreateLocalModelWithoutToolAsync(
     overwrite: true
 );
 ```
-- Use pipe-format paths (`|Projects|...|file.rvt`) or Windows-style relative paths (`Projects\...\file.rvt`).
+- Use pipe-format paths (`|Projects|...|file.rvt`) or Windows-style relative paths (`Projects\...\file.rvt`). Leading, trailing and doubled separators are ignored and `/` is a separator too, as in the REST client (the ModelService itself rejects them with `ModelMissingFault`).
 
 ### How the export works
 1. Endpoint: `net.tcp://{ServerHost}/ModelService{RevitVersion}/ModelService.svc/tcpstream`. `RevitVersion` must be a four-digit year (`ArgumentException` otherwise) and must be the year of the Revit Server: with another year the server has no such endpoint and the export fails with `InvalidOperationException` ("no ModelService endpoint responded").
@@ -215,7 +219,7 @@ await api.CreateLocalModelWithoutToolAsync(
 ### Locks
 - `LockData` must return `Locked` or `WasLocked` (the read lock of this user name already exists, for example left by an interrupted earlier export). `Busy` means another operation holds the model (for example a synchronization with central): like RevitServerTool, `LockData` is then tried up to 5 times, 10 s apart (the wait is cancellable); the lock contention faults `DataLockContentionFault` and `PermissionLockContentionFault` are retried the same way. When all 5 attempts fail, or for any other status (`Missing`, `GaveUp`, `Unknown`), the export throws `InvalidOperationException` that names the status (and the number of attempts). A model locked by an administrator fails in `LockData` at once with the server fault `AdminLockBusyOnModelFault` (checked on Revit Server 2022).
 - `UnlockData` is always called once the read lock may have been taken: after success, after an error and after cancellation (then on a new channel; the unlock itself is not cancellable). It is retried up to 5 times, 10 s apart, when it fails with a communication error (as RevitServerTool does); a timeout is not retried. If `LockData` was interrupted (cancelled or timed out) while the server was still processing it, the server can apply the lock after the unlock: when the first `UnlockData` then finds no lock, it is sent once more after 5 s. If the lock still appears later, it stays until it expires (12 h) or until the next export of this model from this machine, which gets `WasLocked` and releases it. Before 1.3.0 the lock was never released and stayed on the server until it expired (12 h).
-- The read lock is held under the user name `RevitServerTool:{machine name}:1`. RevitServerTool uses `RevitServerTool:{machine name}:{n}`, where `n` is the number of its installation folder on that machine: each installation gets the lowest free number the first time it runs (listed in `RevitServerTool.ini`, in `C:\ProgramData\Autodesk\RevitServerTool\Data` on the machine tested). So only one RevitServerTool installation per machine uses the same name as this library; for example, with Revit 2022 and 2024 installed, RevitServerTool 2024 used `:2`. The server keeps one read lock per user name, so exports of the same model under the same name must not overlap. The export holds a named mutex with the same name as RevitServerTool's, `{user}_{model path}_{server}`, from `LockData` to `UnlockData` (RevitServerTool takes it earlier, before `IdentifyModel`, which takes no lock): exports of the same model by this library, and by a RevitServerTool that uses the same user name, wait for each other in the same Windows session (other sessions have their own mutex namespace). The mutex name is case-sensitive and uses `ServerHost` (trimmed, including any `:port`) and the model path exactly as given; the only changes are `|` to `\` to `:` and a dropped leading `|`. The same model spelled differently (host case, IP address instead of the name, `:port`, path case, `/`) is not serialized. `ExportModelAsync` and `CreateLocalModelWithoutToolAsync` lowercase the host and drop the port, but the path must still be spelled the same. A name longer than 260 characters (the mutex name limit of .NET Framework) is replaced by a SHA-256 hash, so it does not coordinate with RevitServerTool. Without a `CancellationToken` the wait has no timeout. A RevitServerTool with another number holds its own read lock at the same time; each releases only its own (checked on Revit Server 2024).
+- The read lock is held under the user name `RevitServerTool:{machine name}:1`. RevitServerTool uses `RevitServerTool:{machine name}:{n}`, where `n` is the number of its installation folder on that machine: each installation gets the lowest free number the first time it runs (listed in `RevitServerTool.ini`, in `C:\ProgramData\Autodesk\RevitServerTool\Data` on the machine tested). So only one RevitServerTool installation per machine uses the same name as this library; for example, with Revit 2022 and 2024 installed, RevitServerTool 2024 used `:2`. The server keeps one read lock per user name, so exports of the same model under the same name must not overlap. The export holds a named mutex with the same name as RevitServerTool's, `{user}_{model path}_{server}`, from `LockData` to `UnlockData` (RevitServerTool takes it earlier, before `IdentifyModel`, which takes no lock): exports of the same model by this library, and by a RevitServerTool that uses the same user name, wait for each other in the same Windows session (other sessions have their own mutex namespace). The mutex name is case-sensitive and uses `ServerHost` (trimmed, including any `:port`) and the model path after normalization: the path is split on `|`, `/` and `\`, empty segments (leading, trailing, doubled separators) are dropped, and the rest is joined with `\`, which then becomes `:` in the name. So `|A|B.rvt`, `A/B.rvt`, `A\B.rvt` and `||A||B.rvt|` share one mutex. The same model spelled differently in host (case, IP address instead of the name, `:port`) or in path case is not serialized. `ExportModelAsync` and `CreateLocalModelWithoutToolAsync` lowercase the host and drop the port, but the path case must still be the same. A name longer than 260 characters (the mutex name limit of .NET Framework) is replaced by a SHA-256 hash, so it does not coordinate with RevitServerTool. Without a `CancellationToken` the wait has no timeout. A RevitServerTool with another number holds its own read lock at the same time; each releases only its own (checked on Revit Server 2024).
 - When exports that are not serialized overlap (another Windows session, or another spelling), the first one to finish releases the read lock of the other. The other export then gets `WasNotLocked` from `UnlockData`; it still succeeds (the file is usually consistent), and the lost lock is reported with `System.Diagnostics.Trace.TraceWarning` ("... was already released when UnlockData ran ..."), or in `Data["RevitServerNet.ReadLockLost"]` of the exception when the export failed.
 - If `UnlockData` fails after an otherwise successful export, the file is still written, and the export throws `InvalidOperationException`: "The model was exported to '...', but releasing the server read lock failed (...). The read lock of user '...' remains on the server until it expires (12 h) or until the next export of this model from this machine releases it." Its `Data["RevitServerNet.ExportedFile"]` holds the path of the exported file: this key means that the RVT file is complete and only the lock release failed. If the export fails for another reason, an `UnlockData` failure is added to that exception's `Data["RevitServerNet.UnlockDataError"]` (that key alone does not mean a file was written).
 
@@ -260,7 +264,8 @@ public RevitServerApi(string host, string userName, bool useHttps = false, strin
 #### Properties
 
 - `BaseUrl`: Gets the base URL for API requests
-- `UserName`: Gets the user name used for API requests
+- `UserName`: Gets the user name used for API requests. A name with non-ASCII characters (for example a Cyrillic Windows account) is sent percent-encoded in the `User-Name` header, as are a non-ASCII machine name and `additionalHeaders` values: Revit Server 2022 and 2025 answer raw UTF-8 header values with HTTP 400.
+- `Timeout` (`TimeSpan?`): time limit of one request, from sending it to reading the whole response; `Timeout.InfiniteTimeSpan` means no limit, at most `int.MaxValue` milliseconds. A request that exceeds it is aborted and throws `RevitServerApiException` ("API request timed out after ..."). `null` (the default) keeps the behaviour of earlier versions: on .NET 6/8 `HttpWebRequest` ends a request after 100 s, on .NET Framework the requests have no limit. Long server operations (a copy or move of a large model, a delete of a big folder) can take longer than 100 s.
 
 #### Methods
 
@@ -268,6 +273,7 @@ public RevitServerApi(string host, string userName, bool useHttps = false, strin
 - `PostAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)`: Performs POST request
 - `PutAsync(string command, string data = null, Dictionary<string, string> additionalHeaders = null)`: Performs PUT request
 - `DeleteAsync(string command, Dictionary<string, string> additionalHeaders = null)`: Performs DELETE request
+- Overloads of the four methods with a trailing `CancellationToken`: a cancelled token aborts the request and throws `OperationCanceledException`.
 - `static string EncodePath(string path)`: Builds the path part of a command. It turns `\` and `/` into `|`, collapses `||`, adds a leading `|` and percent-encodes every folder/model name with `Uri.EscapeDataString` (the `|` separators stay as is). A null or empty path gives `|` (the root). Example: `|#Archive|Model.rvt` becomes `|%23Archive|Model.rvt`.
 
 ### Extension Methods
@@ -284,7 +290,7 @@ All extension methods return `Task<T>`; `-> T` below shows the awaited result ty
 - `GetServerInfoAsync(this RevitServerApi api)` -> `ServerInfo`
 - `PingServerAsync(this RevitServerApi api)` -> `bool` (returns `false` on any error)
 - `IsServerRunningAsync(this RevitServerApi api)` -> `bool` (returns `false` on any error or empty server properties)
-- `GetServerVersionAsync(this RevitServerApi api)` -> `string`
+- `GetServerVersionAsync(this RevitServerApi api)` -> `string`: the server reports no version, so this is the year of the server version the client was created with (`"2012"` for the unversioned path), returned after a request that shows the server answers
 - `GetServerRolesAsync(this RevitServerApi api)` -> `List<ServerRole>`
 - `GetMaximumModelNameLengthAsync(this RevitServerApi api)` -> `int`
 - `GetServerDriveInfoAsync(this RevitServerApi api)` -> `(long DriveSpace, long DriveFreeSpace)`
@@ -293,16 +299,16 @@ All extension methods return `Task<T>`; `-> T` below shows the awaited result ty
 - `GetRootFolderContentsAsync(this RevitServerApi api)` / `GetFolderContentsAsync(this RevitServerApi api, string folderPath)` -> `FolderContents`
 - `GetFolderInfoAsync(this RevitServerApi api, string folderPath)` -> `FolderInfo`; `GetFolderSizeAsync(this RevitServerApi api, string folderPath)` -> `long`
 - `GetModelInfoAsync(this RevitServerApi api, string modelPath)` -> `ModelInfo`
-- `FolderExistsAsync(this RevitServerApi api, string folderPath)` / `ModelExistsAsync(this RevitServerApi api, string modelPath)` -> `bool`
-- `CreateFolderAsync(this RevitServerApi api, string parentFolderPath, string folderName)`, `DeleteFolderAsync(this RevitServerApi api, string folderPath)`, `RenameFolderAsync(this RevitServerApi api, string folderPath, string newName)` -> `OperationResult`
+- `FolderExistsAsync(this RevitServerApi api, string folderPath)` / `ModelExistsAsync(this RevitServerApi api, string modelPath)` -> `bool`: `false` only when the server says the item does not exist (404; `FolderExistsAsync` also for a model path); other errors are thrown
+- `CreateFolderAsync(this RevitServerApi api, string parentFolderPath, string folderName)`, `DeleteFolderAsync(this RevitServerApi api, string folderPath)`, `RenameFolderAsync(this RevitServerApi api, string folderPath, string newName)` -> `OperationResult`. Delete removes the folder (or model) with all its contents; the root is never deleted or renamed. `RenameFolderAsync` throws `ArgumentException` for a null, empty or whitespace `newName` or one with `|`, `/` or `\` (the server's rename with an empty name is a delete), and `CreateFolderAsync` for an empty `folderName` or one with a separator, before any request. `CreateFolderAsync` is `Success` also when the folder already exists (the server answers 200). For some names (for example "Кир") the server answers 500 after it created, renamed or deleted the item, and after a timeout the outcome is open too; these methods then check the outcome and report success when the item is in the expected state.
 - `ListFilesAsync(this RevitServerApi api, string folderPath = "|")` -> `List<RevitFileInfo>`; `ListFoldersAsync(this RevitServerApi api, string folderPath = "|")` -> `List<FolderInfo>`; `ListModelsAsync(this RevitServerApi api, string folderPath = "|")` -> `List<ModelInfo>`
 - `GetAllModelsRecursiveAsync(this RevitServerApi api, string folderPath = "|")` -> `List<ModelInfo>` (throws `RevitServerApiException` when the `contents` response of any visited folder has an empty body); `GetAllFoldersRecursiveAsync(this RevitServerApi api, string folderPath = "|")` -> `List<FolderInfo>`
-- `WalkAsync(this RevitServerApi api, string topPath = "|", bool includeFiles = true, bool includeModels = true, bool digModels = false)` -> `WalkResult`
+- `WalkAsync(this RevitServerApi api, string topPath = "|", bool includeFiles = true, bool includeModels = true, bool digModels = false)` -> `WalkResult` (a folder that cannot be read throws `RevitServerApiException`; with `digModels` the internal files and folders of each model are listed after the model)
 - `CreateLocalModelWithoutToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, string revitVersion = null, string assembliesPath = null, bool overwrite = false)` -> `string` (path of the created file)
 - `CreateLocalModelWithoutToolAsync(this RevitServerApi api, string modelPipePath, string destinationFile, bool createLocal, string revitVersion = null, string assembliesPath = null, bool overwrite = false, IProgress<long> bytesProgress = null, CancellationToken cancellationToken = default)` -> `string`
 
 #### ProjectExtensions
-- `GetProjectInfoAsync(this RevitServerApi api, string modelPath)` -> `List<ProjParameter>`
+- `GetProjectInfoAsync(this RevitServerApi api, string modelPath)` -> `List<ProjParameter>`. The server localizes the parameter type: `DataType` maps the English names and the Russian "Текст" and "Многострочный текст", and is `Unknown` for others; `TypeOfParameter` has the text as the server sent it. A parameter without a display name gets the JSON property name as `Name`. An empty or non-array response throws `RevitServerApiException`.
 
 #### HistoryExtensions
 - `GetModelHistoryAsync(this RevitServerApi api, string modelPath)` -> `ModelHistory`
@@ -310,7 +316,8 @@ All extension methods return `Task<T>`; `-> T` below shows the awaited result ty
 - `GetLatestVersionAsync(api, string modelPath)`, `GetVersionAsync(api, string modelPath, int version)` -> `HistoryItem`
 - `GetLatestVersionsAsync(api, string modelPath, int count)`, `GetModelHistoryPageAsync(api, string modelPath, int skip, int take)`, `GetVersionsByUserAsync(api, string modelPath, string userName)`, `GetVersionsByUserAsync(api, string modelPath, string userName, int? take)` -> `List<HistoryItem>`
 - `GetVersionCountAsync(api, string modelPath)` -> `int`, `GetTotalModelSizeAsync(api, string modelPath)` -> `long`, `GetLastVersionCommentAsync(api, string modelPath)` -> `string`
-- Lock queries: `GetLocksAsync(api)` -> `LocksList`, `GetModelLockAsync(api, string modelPath)` -> `LockInfo`, `IsModelLockedAsync(api, string modelPath)` -> `bool` (returns `false` on any error), `GetModelLockUserAsync(api, string modelPath)` -> `string`, `GetLocksByUserAsync(api, string userName)` -> `List<LockInfo>`, `GetActiveLocksCountAsync(api)` -> `int`
+- History items: `Version` (`VersionNumber`), `Size` (`ModelSize`), `SupportSize`, `OverwrittenByHistoryNumber`, `User`, `Comment`, `Date` (raw `/Date(ms)/`) and `DateUtc`. The `fromDate`/`toDate` filters compare `DateUtc` with the bounds converted to UTC, both inclusive. `take: 0` gives an empty page, negative `skip`/`take` count as 0.
+- Lock queries (the REST service has no lock endpoint for reading; these use `directoryinfo` and `|/descendent/locks`): `GetLocksAsync(api)` -> `LocksList` (locks below the root), `GetModelLockAsync(api, string modelPath)` -> `LockInfo` (null when unlocked; `LockState` is `LockedChild` for a folder with a locked item below it), `IsModelLockedAsync(api, string modelPath)` -> `bool`, `GetModelLockUserAsync(api, string modelPath)` -> `string` (the server names the owner only for a lock in progress, otherwise null), `GetActiveLocksCountAsync(api)` -> `int`. A missing model or folder throws `RevitServerApiException` with `StatusCode` 404, other errors are thrown too. `GetLocksByUserAsync(api, string userName)` throws `NotSupportedException`: the server does not report who owns a lock.
 
 #### LockingExtensions
 - `LockItemAsync(this RevitServerApi api, string itemPath)` / `UnlockItemAsync(this RevitServerApi api, string itemPath)` -> `OperationResult` (a `RevitServerApiException` from the HTTP call is propagated)
@@ -319,7 +326,7 @@ All extension methods return `Task<T>`; `-> T` below shows the awaited result ty
 - `DeleteDescendentLocksAsync(this RevitServerApi api, string folderPath)` -> `OperationResult`
 - `CopyItemAsync` / `MoveItemAsync(this RevitServerApi api, string sourcePath, string destinationPath, bool overwrite = false)` -> `OperationResult`
 
-`CancelLockAsync`, `DeleteDescendentLocksAsync`, `CopyItemAsync` and `MoveItemAsync` catch exceptions and return `OperationResult` with `Success = false`. They also return `Success = false` when the server answers 2xx with an empty body; in that case `Message` still holds the success text (for example "Item copied successfully").
+The server answers these operations with 2xx and an empty body on success, so `Success = true` means the server accepted the operation. `CancelLockAsync`, `DeleteDescendentLocksAsync`, `CopyItemAsync` and `MoveItemAsync` turn a `RevitServerApiException` into `Success = false` with the error in `Message`; other exceptions propagate. `DeleteDescendentLocksAsync` is `Success = false` when the server lists `FailedItems`. A null, empty or whitespace path throws `ArgumentException` before any request (before, it meant the server root); `LockItemAsync`, `CopyItemAsync` and `MoveItemAsync` also refuse the root `|`. For some destination names (for example "Ка.rvt") the server answers 500 after it copied or moved the item: a move is then reported as done when the source is gone and the destination exists (also after a timeout), and a copy without `overwrite` when the destination exists (a copy onto an existing item without `overwrite` is answered 409, so the item is new). A copy with `overwrite` that gets a 500, and a copy that gets no answer (the server may still be copying), stay failures.
 
 Lock information is in `HistoryExtensions`: `GetModelLockAsync(this RevitServerApi api, string modelPath)` -> `LockInfo`, plus `GetLocksAsync`, `IsModelLockedAsync`, `GetModelLockUserAsync`, `GetLocksByUserAsync` and `GetActiveLocksCountAsync`.
 
@@ -341,15 +348,15 @@ Items are addressed by `id`: a backslash path that starts with the server host, 
 
 - Raw (return the response body as `string`; `apiPath` is relative to `BaseUrl`, e.g. `"api/model/details"`): `GetAsync/DeleteAsync(string apiPath, Dictionary<string,string> query = null)`, `PostAsync/PutAsync(string apiPath, Dictionary<string,string> query = null, string data = null)`
 - `GetModelDetailsAsync(string id)` -> `UiModelDetails`; `GetItemLockDataAsync(string id, string placeholder = "")` -> `UiItemLockData`; `GetModelHistoriesAsync(string id, string type = "rs-model")` -> `List<UiModelHistoryItem>`; `GetSubItemsAsync(string id, int depth = 1)` -> `UiTreeItem` (models in `RevitServerNet.Models`)
-- `DeleteOrRenameAsync(string id, string newName = null)` (deletes when `newName` is null, empty or whitespace, renames otherwise), `CopyOrMoveAsync(string id, string destinationId, RevitServerUiApi.PasteAction pasteAction, bool replaceExisting = false)` -> `string` (URL), `LockAsync(string id)`, `UnlockAsync(string id, bool itemMustExist = true)`, `CreateFolderAsync(string id)` -> `string` (URL)
+- `DeleteOrRenameAsync(string id, string newName = null)` (deletes when `newName` is null, renames otherwise; an empty or whitespace `newName` throws `ArgumentException`, because the server deletes on it), `DeleteItemAsync(string id)`, `RenameAsync(string id, string newName)`, `CopyOrMoveAsync(string id, string destinationId, RevitServerUiApi.PasteAction pasteAction, bool replaceExisting = false)` -> `string` (URL), `LockAsync(string id)`, `UnlockAsync(string id, bool itemMustExist = true)`, `CreateFolderAsync(string id)` -> `string` (URL)
 
-HTTP errors and failed requests are thrown as `RevitServerUiApiException`, which has the same `StatusCode`/`ResponseContent` properties as `RevitServerApiException`. Invalid arguments (for example an empty `id`) throw `ArgumentException`/`ArgumentOutOfRangeException`, and the typed methods raise a Newtonsoft.Json exception when the response body is not valid JSON.
+HTTP errors and failed requests are thrown as `RevitServerUiApiException`, which has the same `StatusCode`/`ResponseContent` properties as `RevitServerApiException`. The server also reports some failures with HTTP 200 and an error descriptor (`StatusCode`, `TitleText`, `MessageText`, `DetailText`), for example a lock of an item that is already locked ("Cannot Lock Model"); every call, the raw ones too, throws `RevitServerUiApiException` with that text for such a body. Invalid arguments (for example an empty `id`) throw `ArgumentException`/`ArgumentOutOfRangeException`, and the typed methods raise a Newtonsoft.Json exception when the response body is not valid JSON.
 
 ### ModelExporter (namespace `RevitServerNet`)
 
 Direct export over the Revit Server ModelService (no `RevitServerTool.exe`), see [Direct export from Revit Server](#direct-export-from-revit-server-rs-enterprise-api):
 
-- `static Task<string> ExportAsync(ModelExporterOptions options, IProgress<long> bytesProgress = null, CancellationToken cancellationToken = default)`: returns the path of the created RVT file. `bytesProgress` reports the bytes downloaded so far of the current model-data file (after every 80 KB block; it restarts from 0 for every file). `bytesProgress.Report` is called on a thread-pool thread: use `System.Progress<T>` or marshal yourself for UI updates (the same applies to the `ExportModelAsync` and `CreateLocalModelWithoutToolAsync` overloads with `bytesProgress`). `cancellationToken` cancels the export (see Cancellation above). Overlapping exports of the same model are serialized only within one Windows session and only when `ServerHost` and `ModelPipePath` are spelled the same (see Locks above). Throws `ArgumentNullException` if `options` is null and `ArgumentException` if `ServerHost`, `ModelPipePath`, `DestinationFile` or `RevitVersion` is empty, `RevitVersion` is not a four-digit year, or `ServerHost` is not a host name or IP address with an optional port. Creates the destination directory if needed; if `DestinationFile` already exists and `Overwrite` is `false`, throws `IOException` before contacting the server (the same applies to `ExportModelAsync` and `CreateLocalModelWithoutToolAsync`).
+- `static Task<string> ExportAsync(ModelExporterOptions options, IProgress<long> bytesProgress = null, CancellationToken cancellationToken = default)`: returns the path of the created RVT file. `bytesProgress` reports the bytes downloaded so far of the current model-data file (after every 80 KB block; it restarts from 0 for every file). `bytesProgress.Report` is called on a thread-pool thread: use `System.Progress<T>` or marshal yourself for UI updates (the same applies to the `ExportModelAsync` and `CreateLocalModelWithoutToolAsync` overloads with `bytesProgress`). `cancellationToken` cancels the export (see Cancellation above). Overlapping exports of the same model are serialized only within one Windows session and only when `ServerHost` is spelled the same and `ModelPipePath` has the same case (separators are normalized; see Locks above). Throws `ArgumentNullException` if `options` is null and `ArgumentException` if `ServerHost`, `ModelPipePath`, `DestinationFile` or `RevitVersion` is empty, `RevitVersion` is not a four-digit year, or `ServerHost` is not a host name or IP address with an optional port. Creates the destination directory if needed; if `DestinationFile` already exists and `Overwrite` is `false`, throws `IOException` before contacting the server (the same applies to `ExportModelAsync` and `CreateLocalModelWithoutToolAsync`). The destination is checked before anything is downloaded: a `DestinationFile` that does not end with a valid file name throws `ArgumentException`; an existing folder in its place, a folder that cannot be written, or (with `Overwrite`) an existing file that is read-only or open in another process throws `IOException`/`UnauthorizedAccessException`, and no read lock is taken.
 - `ModelExporterOptions`: `ServerHost` (host or host:port of the net.tcp endpoint), `ModelPipePath` (pipe format `|Projects|...|file.rvt` or Windows-style relative path), `DestinationFile`, `RevitVersion` (four-digit year, e.g. `"2024"`), `AssembliesPath` (optional; see Search order under [Bundled Autodesk client assemblies](#bundled-autodesk-client-assemblies)), `Overwrite` (default `false`), `CreateLocal` (default `false`).
 
 ### RevitServerToolClient (namespace `RevitServerNet.Tools`)
@@ -357,21 +364,24 @@ Direct export over the Revit Server ModelService (no `RevitServerTool.exe`), see
 Static wrapper around `RevitServerTool.exe createLocalRvt`:
 
 - `static string TryLocateToolPath(string versionHint = null)`: checks the `REVITSERVER_TOOL_PATH` environment variable first, then `Autodesk\Revit <versionHint>\RevitServerToolCommand\RevitServerTool.exe`, then any `Autodesk\Revit *` folder under the Program Files folders. Returns `null` if the tool is not found.
-- `static Task<RevitServerToolResult> CreateLocalModelAsync(string toolPath, string serverHost, string modelRelativePath, string destinationFile, bool overwrite = false, int timeoutMs = 600000)`: runs the tool and returns its result. It does not throw on a non-zero exit code, so check `Success`. Throws `ArgumentException` if `serverHost`, `modelRelativePath` or `destinationFile` is empty, `RevitServerToolException` if `toolPath` does not exist, and `System.ComponentModel.Win32Exception` if the process cannot be started (for example `toolPath` is not an executable). The task faults with `TimeoutException` after `timeoutMs`.
+- `static Task<RevitServerToolResult> CreateLocalModelAsync(string toolPath, string serverHost, string modelRelativePath, string destinationFile, bool overwrite = false, int timeoutMs = 600000)`: runs the tool and returns its result. It does not throw on a non-zero exit code, so check `Success`. Throws `ArgumentException` if `serverHost`, `modelRelativePath` or `destinationFile` is empty, or if the full destination path has no file name (for example it ends with a separator); `ArgumentOutOfRangeException` if `timeoutMs` is less than -1; `RevitServerToolException` if `toolPath` does not exist; and `System.ComponentModel.Win32Exception` if the process cannot be started (for example `toolPath` is not an executable). Creating the destination directory can throw `IOException`, `UnauthorizedAccessException`, `PathTooLongException` or `NotSupportedException`. The task faults with `TimeoutException` after `timeoutMs`: the tool is killed and the wait for it to exit is limited to 5 seconds.
 - `static string ConvertPipePathToRelativeWindowsPath(string pipePath)`: converts `|Projects|Demo|Model.rvt` to `Projects\Demo\Model.rvt`.
 - `static string ParseVersionFromBaseUrl(string baseUrl)`: extracts the year from `RevitServerAdminRESTService<year>`, or returns `null`.
-- `RevitServerToolResult`: `ExitCode`, `StandardOutput`, `StandardError`, `Success` (`ExitCode == 0`).
+- `RevitServerToolResult`: `ExitCode`, `StandardOutput`, `StandardError`, `ErrorMessage` (the first output line that starts with `ERROR:`, or null), `Success` (`ExitCode == 0` and no `ERROR:` line: RevitServerTool exits with 0 also when it fails, for example for a model that does not exist).
+- The server host, model path and destination are passed as separately quoted and escaped arguments; a destination without a directory is relative to the current directory.
 - `RevitServerToolException`: thrown for tool-level failures.
 
 ## Error Handling
 
 `RevitServerApi.GetAsync`/`PostAsync`/`PutAsync`/`DeleteAsync` throw `RevitServerApiException` when the server returns an HTTP error response or no response at all. Exception: on .NET Framework 4.8, `PostAsync`/`PutAsync` called with a request body (`data`) throw a plain `System.Net.WebException` if the connection fails while the body is being sent (the same applies to `RevitServerUiApi.PostAsync`/`PutAsync`). The extension methods never send a body and are not affected. Extension methods pass it through unless they are listed below. That includes the data getters (for example `GetFolderContentsAsync`, `GetModelHistoryAsync`, `GetProjectInfoAsync`) and `CreateFolderAsync`, `LockItemAsync` and `UnlockItemAsync`. `GetAllModelsRecursiveAsync` also throws `RevitServerApiException` when a folder's contents response has an empty body.
 
-These extension methods catch every exception themselves, including `RevitServerApiException` and JSON errors, and do not rethrow:
-- `DeleteFolderAsync`, `RenameFolderAsync`, `CancelLockAsync`, `DeleteDescendentLocksAsync`, `CopyItemAsync` and `MoveItemAsync` return an `OperationResult` with `Success = false` and the error in `Message`.
-- `FolderExistsAsync`, `ModelExistsAsync`, `IsModelLockedAsync`, `PingServerAsync` and `IsServerRunningAsync` return `false`.
+These extension methods do not throw for a server error:
+- `DeleteFolderAsync`, `RenameFolderAsync`, `CancelLockAsync`, `DeleteDescendentLocksAsync`, `CopyItemAsync` and `MoveItemAsync` turn a `RevitServerApiException` into an `OperationResult` with `Success = false` and the error in `Message`. Argument errors (`ArgumentException`) and cancellation propagate.
+- `FolderExistsAsync` and `ModelExistsAsync` return `false` for a 404 and throw other errors.
+- `PingServerAsync` and `IsServerRunningAsync` return `false` on any error.
 - `GetDescendentLocksAsync` returns the exception text (`ex.ToString()`) as its result.
-- `WalkAsync` skips folders it cannot read, and does not report which ones.
+
+`IsModelLockedAsync`, the other lock queries and `WalkAsync` throw (before 1.4.0 they returned `false` or skipped unreadable folders). A request that gets no HTTP response throws `RevitServerApiException` with the cause in the message ("API request failed: ...") and as `InnerException`.
 
 In the methods that do not catch, a response body that is not valid JSON raises a Newtonsoft.Json exception, not `RevitServerApiException`.
 

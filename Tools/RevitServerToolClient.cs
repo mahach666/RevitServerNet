@@ -19,7 +19,16 @@ namespace RevitServerNet.Tools
         public int ExitCode { get; set; }
         public string StandardOutput { get; set; }
         public string StandardError { get; set; }
-        public bool Success => ExitCode == 0;
+        // RevitServerTool exits with 0 also when it fails (for example for an unknown model) and then prints a line "ERROR: ..."
+        public bool Success => ExitCode == 0 && ErrorMessage == null;
+
+        // The first output line of the tool that starts with "ERROR:", or null
+        public string ErrorMessage =>
+            new[] { StandardOutput, StandardError }
+                .Where(text => !string.IsNullOrEmpty(text))
+                .SelectMany(text => text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.StartsWith("ERROR:", StringComparison.Ordinal));
     }
 
     public static class RevitServerToolClient
@@ -60,7 +69,10 @@ namespace RevitServerNet.Tools
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
+            {
+                // An unreadable Program Files folder or a versionHint that is not a valid path segment: no tool found.
+            }
             return null;
         }
 
@@ -80,17 +92,51 @@ namespace RevitServerNet.Tools
             if (string.IsNullOrWhiteSpace(destinationFile))
                 throw new ArgumentException("Destination file path is required", nameof(destinationFile));
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationFile));
+            if (timeoutMs < -1)
+                throw new ArgumentOutOfRangeException(nameof(timeoutMs), "Timeout must be non-negative, or -1 for no timeout.");
 
-            var argsBuilder = new StringBuilder();
-            argsBuilder.Append("createLocalRvt ");
-            argsBuilder.Append('"').Append(modelRelativePath).Append('"');
-            argsBuilder.Append(" -s ").Append(serverHost);
-            argsBuilder.Append(" -d ").Append('"').Append(destinationFile).Append('"');
-            if (overwrite)
-                argsBuilder.Append(" -o");
+            // A file name without a directory part is relative to the current directory.
+            var destinationPath = Path.GetFullPath(destinationFile);
+            if (string.IsNullOrEmpty(Path.GetFileName(destinationPath)))
+                throw new ArgumentException("Destination file path must end with a file name", nameof(destinationFile));
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
 
-            return await ExecuteProcessAsync(toolPath, argsBuilder.ToString(), timeoutMs);
+            return await ExecuteProcessAsync(toolPath, BuildCreateLocalArguments(serverHost, modelRelativePath, destinationPath, overwrite), timeoutMs).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Command line of "createLocalRvt": every value quoted and escaped, so that it reaches the tool as one argument
+        /// (a host or path with spaces or quotes cannot add or change options).
+        /// </summary>
+        internal static string BuildCreateLocalArguments(string serverHost, string modelRelativePath, string destinationPath, bool overwrite)
+        {
+            var args = "createLocalRvt " + QuoteArgument(modelRelativePath) + " -s " + QuoteArgument(serverHost) + " -d " + QuoteArgument(destinationPath);
+            return overwrite ? args + " -o" : args;
+        }
+
+        /// <summary>
+        /// Quotes one argument for a Windows command line (the rules of CommandLineToArgvW and the C runtime): embedded quotes are escaped,
+        /// and the backslashes before a quote, including the closing one, are doubled.
+        /// </summary>
+        internal static string QuoteArgument(string argument)
+        {
+            var quoted = new StringBuilder("\"");
+            var backslashes = 0;
+            foreach (var c in argument)
+            {
+                if (c == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+                if (c == '"')
+                    quoted.Append('\\', backslashes * 2 + 1);
+                else
+                    quoted.Append('\\', backslashes);
+                quoted.Append(c);
+                backslashes = 0;
+            }
+            return quoted.Append('\\', backslashes * 2).Append('"').ToString();
         }
 
         public static string ConvertPipePathToRelativeWindowsPath(string pipePath)
@@ -108,6 +154,8 @@ namespace RevitServerNet.Tools
             return m.Success ? m.Groups[1].Value : null;
         }
 
+        private const int KillWaitMs = 5000;
+
         private static async Task<RevitServerToolResult> ExecuteProcessAsync(string fileName, string arguments, int timeoutMs)
         {
             var psi = new ProcessStartInfo
@@ -120,13 +168,12 @@ namespace RevitServerNet.Tools
                 CreateNoWindow = true,
             };
 
-            using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
+            using (var process = new Process { StartInfo = psi })
             {
-                var tcs = new TaskCompletionSource<int>();
                 var stdout = new StringBuilder();
                 var stderr = new StringBuilder();
-                process.OutputDataReceived += (s, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
-                process.ErrorDataReceived += (s, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+                process.OutputDataReceived += (s, e) => { if (e.Data != null) lock (stdout) stdout.AppendLine(e.Data); };
+                process.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (stderr) stderr.AppendLine(e.Data); };
 
                 if (!process.Start())
                     throw new RevitServerToolException("Failed to start RevitServerTool process.");
@@ -134,32 +181,37 @@ namespace RevitServerNet.Tools
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
-                using (var cts = new System.Threading.CancellationTokenSource())
+                var exited = await Task.Run(() => process.WaitForExit(timeoutMs)).ConfigureAwait(false);
+                if (!exited)
                 {
-                    var registration = cts.Token.Register(() =>
+                    try
                     {
-                        try { if (!process.HasExited) process.Kill(); } catch { }
-                        tcs.TrySetException(new TimeoutException("RevitServerTool timed out."));
-                    });
-                    cts.CancelAfter(timeoutMs);
-
-                    process.Exited += (s, e) =>
+                        process.Kill();
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception)
                     {
-                        try { registration.Dispose(); } catch { }
-                        tcs.TrySetResult(process.ExitCode);
-                    };
-
-                    var exitCode = await tcs.Task.ConfigureAwait(false);
-                    return new RevitServerToolResult
-                    {
-                        ExitCode = exitCode,
-                        StandardOutput = stdout.ToString(),
-                        StandardError = stderr.ToString()
-                    };
+                        // It exited between the timeout and the kill, or is already terminating.
+                    }
+                    // Wait (bounded) for the process to be gone before it is disposed. The overload with a timeout does not wait for the
+                    // end of the redirected output, which a child process of the tool may keep open.
+                    await Task.Run(() => process.WaitForExit(KillWaitMs)).ConfigureAwait(false);
+                    throw new TimeoutException($"RevitServerTool timed out after {timeoutMs} ms and was killed.");
                 }
+
+                // WaitForExit(int) can return before the redirected output has been read to its end; this overload waits for it.
+                await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
+                return new RevitServerToolResult
+                {
+                    ExitCode = process.ExitCode,
+                    StandardOutput = ReadAll(stdout),
+                    StandardError = ReadAll(stderr)
+                };
             }
+        }
+
+        private static string ReadAll(StringBuilder builder)
+        {
+            lock (builder) return builder.ToString();
         }
     }
 }
-
-

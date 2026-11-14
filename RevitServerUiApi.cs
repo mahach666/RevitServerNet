@@ -1,8 +1,10 @@
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using RevitServerNet.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading.Tasks;
@@ -113,24 +115,30 @@ namespace RevitServerNet
             {
                 var bytes = Encoding.UTF8.GetBytes(data);
                 request.ContentLength = bytes.Length;
-                using (var stream = await request.GetRequestStreamAsync())
+                using (var stream = await request.GetRequestStreamAsync().ConfigureAwait(false))
                 {
-                    await stream.WriteAsync(bytes, 0, bytes.Length);
+                    await stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
                 }
             }
 
             try
             {
-                using (var response = await request.GetResponseAsync() as HttpWebResponse)
+                string body;
+                HttpStatusCode status;
+                using (var response = await request.GetResponseAsync().ConfigureAwait(false) as HttpWebResponse)
                 using (var stream = response?.GetResponseStream())
                 {
                     if (stream == null)
                         return null;
+                    status = response.StatusCode;
                     using (var reader = new StreamReader(stream))
                     {
-                        return await reader.ReadToEndAsync();
+                        body = await reader.ReadToEndAsync().ConfigureAwait(false);
                     }
                 }
+
+                ThrowIfErrorDescriptor(status, body);
+                return body;
             }
             catch (WebException ex)
             {
@@ -139,12 +147,39 @@ namespace RevitServerNet
                     using (var stream = errorResponse.GetResponseStream())
                     using (var reader = new StreamReader(stream))
                     {
-                        var errorContent = await reader.ReadToEndAsync();
+                        var errorContent = await reader.ReadToEndAsync().ConfigureAwait(false);
                         throw new RevitServerUiApiException($"UI API request failed with status {errorResponse.StatusCode}: {errorContent}", errorResponse.StatusCode, errorContent, ex);
                     }
                 }
-                throw new RevitServerUiApiException("UI API request failed", ex);
+                throw new RevitServerUiApiException($"UI API request failed: {ex.Message}", ex);
             }
+        }
+
+        // The server reports some failures (lock of an already locked item, unlock of an unlocked one) as HTTP 200 with an
+        // error descriptor {"StatusCode","TitleText","MessageText","DetailText",...} instead of an error status.
+        private static void ThrowIfErrorDescriptor(HttpStatusCode status, string body)
+        {
+            if (string.IsNullOrWhiteSpace(body) || body.TrimStart()[0] != '{')
+                return;
+
+            JObject obj;
+            try
+            {
+                obj = JObject.Parse(body);
+            }
+            catch (JsonReaderException)
+            {
+                return; // not JSON: a regular payload, not a descriptor
+            }
+
+            if (obj["StatusCode"] == null || obj["TitleText"] == null)
+                return;
+
+            var detail = new[] { (string)obj["MessageText"], (string)obj["DetailText"] }
+                .Where(t => !string.IsNullOrWhiteSpace(t));
+            throw new RevitServerUiApiException(
+                $"UI API operation failed: {(string)obj["TitleText"]}. {string.Join(" ", detail)}".TrimEnd(),
+                status, body, null);
         }
 
         private static string BuildQuery(Dictionary<string, string> query)
@@ -173,7 +208,7 @@ namespace RevitServerNet
         public async Task<UiModelDetails> GetModelDetailsAsync(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id cannot be null or empty", nameof(id));
-            var json = await GetAsync("api/model/details", new Dictionary<string, string> { { "id", id } });
+            var json = await GetAsync("api/model/details", new Dictionary<string, string> { { "id", id } }).ConfigureAwait(false);
             return DeserializeJson<UiModelDetails>(json);
         }
 
@@ -188,7 +223,7 @@ namespace RevitServerNet
                 {
                     { "id", id },
                     { "placeholder", placeholder ?? string.Empty }
-                });
+                }).ConfigureAwait(false);
             return DeserializeJson<UiItemLockData>(json);
         }
 
@@ -204,7 +239,7 @@ namespace RevitServerNet
                 {
                     { "type", type },
                     { "id", id }
-                });
+                }).ConfigureAwait(false);
             return DeserializeJson<List<UiModelHistoryItem>>(json) ?? new List<UiModelHistoryItem>();
         }
 
@@ -220,25 +255,45 @@ namespace RevitServerNet
                 {
                     { "id", id },
                     { "depth", depth.ToString() }
-                });
+                }).ConfigureAwait(false);
             return DeserializeJson<UiTreeItem>(json);
         }
 
         /// <summary>
         /// DELETE /api/operation?operationtype=DeleteOrRename&amp;id={id}[&amp;newName={newName}]
-        /// newName omitted -> delete; provided -> rename
+        /// newName null -> delete (irreversible); otherwise rename. An empty or whitespace newName throws
+        /// <see cref="ArgumentException"/>: the server would treat it as a delete. Prefer <see cref="DeleteItemAsync"/> and <see cref="RenameAsync"/>.
         /// </summary>
         public async Task DeleteOrRenameAsync(string id, string newName = null)
         {
             if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id cannot be null or empty", nameof(id));
+            if (newName != null && string.IsNullOrWhiteSpace(newName))
+                throw new ArgumentException("newName cannot be empty or whitespace (the server would delete the item); pass null to delete", nameof(newName));
             var q = new Dictionary<string, string>
             {
                 { "operationtype", "DeleteOrRename" },
                 { "id", id }
             };
-            if (!string.IsNullOrWhiteSpace(newName))
+            if (newName != null)
                 q["newName"] = newName;
-            await DeleteAsync("api/operation", q);
+            await DeleteAsync("api/operation", q).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Deletes a model or folder permanently (DELETE /api/operation?operationtype=DeleteOrRename&amp;id={id}).
+        /// </summary>
+        public Task DeleteItemAsync(string id)
+        {
+            return DeleteOrRenameAsync(id, null);
+        }
+
+        /// <summary>
+        /// Renames a model or folder (DELETE /api/operation?operationtype=DeleteOrRename&amp;id={id}&amp;newName={newName}).
+        /// </summary>
+        public Task RenameAsync(string id, string newName)
+        {
+            if (string.IsNullOrWhiteSpace(newName)) throw new ArgumentException("newName cannot be null or empty", nameof(newName));
+            return DeleteOrRenameAsync(id, newName);
         }
 
         public enum PasteAction
@@ -263,7 +318,7 @@ namespace RevitServerNet
                     { "destinationid", destinationId },
                     { "pasteAction", pasteAction.ToString() },
                     { "replaceExisting", replaceExisting ? "true" : "false" }
-                });
+                }).ConfigureAwait(false);
 
             return DeserializeJsonStringOrRaw(json);
         }
@@ -279,7 +334,7 @@ namespace RevitServerNet
                 {
                     { "operationType", "Lock" },
                     { "id", id }
-                });
+                }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -294,7 +349,7 @@ namespace RevitServerNet
                     { "operationtype", "Unlock" },
                     { "id", id },
                     { "itemMustExist", itemMustExist ? "true" : "false" }
-                });
+                }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -308,7 +363,7 @@ namespace RevitServerNet
                 new Dictionary<string, string>
                 {
                     { "id", id }
-                });
+                }).ConfigureAwait(false);
             return DeserializeJsonStringOrRaw(json);
         }
 
@@ -320,7 +375,7 @@ namespace RevitServerNet
                 // Many UI endpoints return a JSON string like: "http://host/server/path"
                 return JsonConvert.DeserializeObject<string>(json);
             }
-            catch
+            catch (JsonException)
             {
                 return json.Trim();
             }

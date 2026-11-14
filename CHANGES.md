@@ -1,5 +1,50 @@
 # CHANGES
 
+## 1.4.0
+
+Fixes found by checking every REST, Admin UI and export call against live Revit Server 2022 and 2025 (docker test stand; net48 and net8.0). Both servers answered identically in everything checked.
+
+REST client, data:
+- `HistoryItem.Version`, `Size` and the new `OverwrittenByHistoryNumber` map the server fields `VersionNumber`, `ModelSize` and `OverwrittenByHistoryNumber`. Before, `Version` and `Size` were always 0, so `GetLatestVersionAsync` returned the oldest version, `GetVersionAsync` returned null, and the version filters, `GetLatestVersionsAsync`, `GetModelHistoryPageAsync`, `GetLastVersionCommentAsync` and `GetTotalModelSizeAsync` were wrong.
+- `fromDate`/`toDate` of `GetModelHistoryAsync` parse the server's `/Date(ms)/` dates (before, the filter always returned an empty list); bounds are converted to UTC and inclusive. New `DateUtc`, `DateCreatedUtc`, `DateModifiedUtc`. `take: 0` now gives an empty page (before: everything), negative `skip`/`take` count as 0.
+- `ModelInfo.Size` reads `ModelSize` (was always 0). New `ModelInfo` members `ModelGUID`, `DateCreated`, `DateModified`, `LastModifiedBy`; `Name` is taken from `Path` when the server omits it. `FolderInfo` gains `ModelCount`, `FolderCount`, `ModelSize`, `Exists` (null for folders listed in `contents`), `IsFolder`, dates and `LastModifiedBy`; `Name` and `HasContents` are filled for `GetFolderInfoAsync`.
+- `ServerInfo.Roles` reads `ServerRoles` (was always null). The server reports no name or version: `ServerInfo.Version` and `GetServerVersionAsync` give the year the client was created with.
+- `IPLockInfo` reads `ModelLockOptions`/`ModelLockType` and has `TimeStampUtc`/`AgeSpan`; `FolderContents` has `LockState`, `LockContext`, `ModelLocksInProgress`. `ProjParameter.TypeOfParameter` has the parameter type as the server sent it; `DataType` maps the Russian "Текст" and "Многострочный текст" too, and a parameter without a display name gets its JSON name.
+- Lock queries used endpoints the server rejects with 405, so `IsModelLockedAsync` was always false: `GetLocksAsync`, `GetModelLockAsync`, `IsModelLockedAsync`, `GetModelLockUserAsync` and `GetActiveLocksCountAsync` now use `directoryinfo` and `|/descendent/locks`, and throw on errors (a missing model or folder: `RevitServerApiException` with 404). `GetLocksByUserAsync` throws `NotSupportedException` (the server does not report who owns a lock).
+
+REST client, operations:
+- `RenameFolderAsync` with a null, empty or whitespace name deleted the folder with its contents (the server's rename with an empty name is its delete) and reported a failure. It now throws `ArgumentException` before any request, also for a name with `|`, `/` or `\`.
+- `DeleteFolderAsync` never deleted anything (the server answered 405) and said "not allowed - may require special permissions". It now sends the server's delete and reports the real HTTP status on failure; the root is never deleted.
+- `RenameFolderAsync` reported a failure for renames that worked (paths without a leading `|`, case-only renames).
+- `CopyItemAsync`, `MoveItemAsync` and `CancelLockAsync` reported `Success = false` although the operation worked, and `DeleteDescendentLocksAsync` always did; 2xx is now success, and `DeleteDescendentLocksAsync` fails when the server lists `FailedItems`.
+- For some names (for example "Кир", "Ка.rvt") the server answers 500 after it performed a create, rename, delete, copy or move. These calls now check the outcome after a 5xx, and create, rename, delete and move also after a request that got no answer (a timeout), and report success when it is verifiable (not for a copy with `overwrite`, nor for a copy without an answer).
+- A null, empty or whitespace path of `LockItemAsync`, `UnlockItemAsync`, `CancelLockAsync`, `DeleteDescendentLocksAsync`, `CopyItemAsync` and `MoveItemAsync` throws `ArgumentException` (before, it locked or acted on the server root); lock, copy and move also refuse the root `|`. `CreateFolderAsync` throws `ArgumentException` for an empty name or one with `|`, `/` or `\`.
+- `FolderExistsAsync`/`ModelExistsAsync` return false only for a 404 (other errors are thrown); `FolderExistsAsync` is false for a model path. `WalkAsync` throws for a folder it cannot read instead of skipping it silently, and lists each model once with `digModels`. Start paths like `|Test|`, `Test` and `Test/` give the same paths.
+- `GetProjectInfoAsync` throws `RevitServerApiException` for an empty or non-array response.
+- The escaping of names introduced in 1.3.0 is now verified live: folders named `a#b`, `x%41y`, `50%`, `p+q`, `a&b`, `s;t`, `e=f`, `(par)`, `it's!`, `sp ace`, `Фф ё` and `@[x]$,~` are created, listed, renamed and deleted with exactly these names on Revit Server 2022 and 2025. The server itself refuses the characters Windows forbids in file names (`*`, `:`, `"`, `?` with 400, `<` with 500).
+
+REST client, transport:
+- Blocking on a call (`.Result`, `.Wait()`) from a UI thread (WinForms, WPF, a Revit add-in) deadlocked: the library and its extensions now use `ConfigureAwait(false)` everywhere (also `RevitServerUiApi`).
+- A user name, machine name or `additionalHeaders` value with non-ASCII characters (for example a Cyrillic Windows account) threw `ArgumentException` on every request. Such values are now sent percent-encoded, which the servers accept (raw UTF-8 is answered with 400).
+- New `RevitServerApi.Timeout` (`TimeSpan?`; `null` by default keeps the earlier behaviour: 100 s from `HttpWebRequest` on .NET 6/8, no limit on .NET Framework; a set value is enforced on every target) and `CancellationToken` overloads of `GetAsync`/`PostAsync`/`PutAsync`/`DeleteAsync`. The message of a request without an HTTP response now names the cause ("API request failed: ...", also "UI API request failed: ...").
+
+Admin UI client (`RevitServerUiApi`):
+- Failures the server reports with HTTP 200 and an error descriptor (for example locking an item that is already locked) were ignored; every call now throws `RevitServerUiApiException` with the server's text.
+- `DeleteOrRenameAsync` with an empty or whitespace `newName` deleted the item; it now throws `ArgumentException` (`null` still deletes). New `DeleteItemAsync` and `RenameAsync`.
+
+Direct export:
+- The destination is checked before anything is downloaded (invalid file name: `ArgumentException`; an existing folder, an unwritable folder, or with `Overwrite` a read-only or open file: `IOException`/`UnauthorizedAccessException`). Before, the export failed only after the whole download, with the server read lock held.
+- Model paths with a leading, trailing or doubled separator or `/` are accepted as in the REST client (the server rejected them with `ModelMissingFault`). A path naming no model throws `ArgumentException`.
+- Cancelling while the export is still connecting to an unreachable server ends the export at once (before, it took about 20 s).
+- `CreateLocal` keeps writing `ServerHost` as given, a port included, into the central path; RevitServerTool 2022 does the same with `-s host:808` (checked).
+
+`RevitServerToolClient`:
+- `RevitServerToolResult.Success` is false when the tool prints an `ERROR:` line: RevitServerTool exits with 0 also when it fails (for example for a model that does not exist). New `ErrorMessage`.
+- Arguments are quoted and escaped (quotes, spaces, trailing backslashes no longer break them); a destination without a directory works; the whole output is read before returning; a timeout kills the tool and waits for it to exit for at most 5 s, so a child process that keeps the output open no longer delays the `TimeoutException` (before, by up to its lifetime).
+- Direct export: the connection no longer holds its lock while connecting, so cancellation and cleanup never wait for a connect in progress.
+
+Tests: wire tests built on the responses of the real servers, live tests for folders, history, locks, copy/move, the Admin UI API and export (run against Revit Server 2022 and 2025), and a test that blocks on every REST call from a single-threaded synchronization context.
+
 ## 1.3.0
 
 - `RevitServerApi.EncodePath` percent-encodes every folder/model name (segment between `|`) with `Uri.EscapeDataString`; the `|` separator stays as is. Separator normalisation is unchanged (`\` and `/` -> `|`, `||` collapsed, leading `|` added; `null`, `""` and `"|"` still give `"|"`).
